@@ -41,6 +41,8 @@ PacketSocket::PacketSocket(std::string_view interface) {
         if (ioctl(socket_, SIOCGIFMTU, &request) < 0) io_error("SIOCGIFMTU");
         if (request.ifr_mtu <= 0) throw std::invalid_argument("Invalid interface MTU");
         mtu_ = static_cast<std::size_t>(request.ifr_mtu);
+        if (ioctl(socket_, SIOCGIFHWADDR, &request) < 0) io_error("SIOCGIFHWADDR");
+        std::memcpy(mac_.data(), request.ifr_hwaddr.sa_data, mac_.size());
         sockaddr_ll address{};
         address.sll_family = AF_PACKET;
         address.sll_protocol = htons(ETH_P_ALL);

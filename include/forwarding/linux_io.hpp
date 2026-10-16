@@ -5,6 +5,7 @@
 #include <optional>
 #include <span>
 #include <string_view>
+#include <array>
 
 namespace forwarding {
 
@@ -20,6 +21,7 @@ public:
     PacketSocket& operator=(PacketSocket&&) = delete;
     [[nodiscard]] unsigned interface_id() const noexcept { return interface_id_; }
     [[nodiscard]] std::size_t mtu() const noexcept { return mtu_; }
+    [[nodiscard]] const std::array<std::uint8_t, 6>& mac_address() const noexcept { return mac_; }
     // Empty on EAGAIN or an outgoing copy. Oversized input throws length_error.
     [[nodiscard]] std::optional<std::size_t> receive(std::span<std::uint8_t> buffer);
     // Returns false under socket backpressure. Enforces MTU and supplies zero
@@ -30,6 +32,7 @@ private:
     int socket_ = -1;
     unsigned interface_id_ = 0;
     std::size_t mtu_ = 0;
+    std::array<std::uint8_t, 6> mac_{};
 };
 
 // Optional Linux affinity. Throws system_error if the requested CPU is not in

@@ -41,3 +41,5 @@ jobs:
       - run: cmake --build build --parallel
       - name: Privileged loopback integration
         run: sudo ./build/linux_io_tests
+      - name: Isolated veth forwarding integration
+        run: sudo bash tests/linux_integration.sh

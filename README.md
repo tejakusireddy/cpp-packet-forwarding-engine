@@ -345,6 +345,29 @@ the user's machine by default. Linux CI runs the raw-socket loopback integration
 test with privileges, checking receive/transmit, padding, and output MTU rejection.
 Ordinary unprivileged CTest runs skip that test when `CAP_NET_RAW` is unavailable.
 
+The Linux executable connects this backend to a buffer pool and flow-dispatched
+workers. It installs IPv4 and IPv6 default routes to one explicitly configured
+Ethernet adjacency:
+
+```sh
+sudo ./build/packet_forwarder IN_INTERFACE OUT_INTERFACE aa:bb:cc:dd:ee:ff 8
+# Optional finite input count and first worker CPU:
+sudo ./build/packet_forwarder IN_INTERFACE OUT_INTERFACE aa:bb:cc:dd:ee:ff 8 1000000 2
+```
+
+The source MAC comes from the output interface. Flow hashes choose a worker;
+worker results choose the adjacency. The dispatcher retains input on full queues,
+retains output on transmit backpressure, and recycles completed buffers. SIGINT
+or SIGTERM stops reception, then drains accepted jobs before joining workers.
+Output reports received, forwarded, and dropped counts. Malformed packets and MTU
+violations are counted drops. The program is a unidirectional reference runtime;
+it does not configure interfaces, discover neighbors, or expose an IPC listener.
+The IPC library is independently usable by an embedding application.
+
+`sudo bash tests/linux_integration.sh` creates a temporary isolated network
+namespace, forwards one IPv4 UDP frame across two veth pairs through the executable,
+checks MAC/TTL/checksum/payload/padding, and deletes the namespace on exit.
+
 ## Benchmarks
 
 ```sh
