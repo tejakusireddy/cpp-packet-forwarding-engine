@@ -4,6 +4,7 @@
 
 #include <atomic>
 #include <memory>
+#include <mutex>
 
 namespace forwarding {
 
@@ -58,12 +59,18 @@ public:
     SnapshotStore& operator=(SnapshotStore&&) = delete;
     [[nodiscard]] std::shared_ptr<const RoutingSnapshot> acquire() const noexcept;
     // Null, equal, and older versions are rejected, leaving the store unchanged.
-    [[nodiscard]] bool publish(std::shared_ptr<const RoutingSnapshot> snapshot) noexcept;
+    [[nodiscard]] bool publish(std::shared_ptr<const RoutingSnapshot> snapshot);
     // Publish only if the current version still equals the batch's base.
     [[nodiscard]] bool publish_if_base(std::shared_ptr<const RoutingSnapshot> snapshot,
-                                       std::uint64_t base_version) noexcept;
+                                       std::uint64_t base_version);
+    // Call on a control thread. Releases retired versions with no remaining
+    // readers, so workers never become the last owner of a retired snapshot.
+    [[nodiscard]] std::size_t collect_retired();
 
 private:
+    void collect_locked();
+    std::mutex publishers_;
+    std::vector<std::shared_ptr<const RoutingSnapshot>> retired_;
 #if defined(__cpp_lib_atomic_shared_ptr) && __cpp_lib_atomic_shared_ptr >= 201711L
     std::atomic<std::shared_ptr<const RoutingSnapshot>> current_;
 #else

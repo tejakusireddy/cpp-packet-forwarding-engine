@@ -251,10 +251,14 @@ table workers report version zero. Keep the store alive until its workers stop.
 
 Publication uses standard atomic operations on shared pointers, including the
 portable free-function interface supported by the macOS standard library. These
-operations are not guaranteed lock-free. Per-packet reference counting and final
-snapshot reclamation may execute on a forwarding thread. This establishes safe
-publication; reader-side synchronization and reclamation still require performance
-work before claiming isolation at the target throughput or latency.
+operations are not guaranteed lock-free. Writers are serialized with a mutex;
+workers never take that writer mutex. The store retains replaced snapshots until
+`collect_retired` finds no readers, then destroys them on the calling control
+thread. Publication also collects unused retired snapshots. Call collection after
+readers finish when updates cease; otherwise those retired versions remain until
+store destruction. Readers holding old versions can increase retained memory.
+Per-packet shared reference counting still requires performance work before
+claiming isolation at the target throughput or latency.
 
 Incremental snapshots share unchanged FIB nodes and copy a trie path only when
 an update touches a shared node. A fresh table still mutates uniquely owned nodes

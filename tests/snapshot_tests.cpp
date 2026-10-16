@@ -63,6 +63,8 @@ void validation_and_lifetime() {
     verify(held);
     check(held->version() == 10 && !retired.expired(), "old reader lost snapshot");
     held.reset();
+    check(!retired.expired(), "retired version must stay owned by the store");
+    check(store.collect_retired() >= 1, "control-thread reclamation");
     check(retired.expired(), "unused retired snapshot not reclaimed");
 
     const auto hop = NextHop{1, 1, {}, {}};

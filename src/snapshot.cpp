@@ -1,6 +1,7 @@
 #include "forwarding/snapshot.hpp"
 
 #include <stdexcept>
+#include <algorithm>
 #include <unordered_set>
 
 namespace forwarding {
@@ -66,11 +67,28 @@ std::shared_ptr<const RoutingSnapshot> SnapshotStore::acquire() const noexcept {
 #endif
 }
 
-bool SnapshotStore::publish(std::shared_ptr<const RoutingSnapshot> snapshot) noexcept {
+void SnapshotStore::collect_locked() {
+    std::erase_if(retired_, [](const auto& snapshot) { return snapshot.use_count() == 1; });
+}
+
+std::size_t SnapshotStore::collect_retired() {
+    const std::lock_guard lock(publishers_);
+    const auto previous = retired_.size();
+    collect_locked();
+    return previous - retired_.size();
+}
+
+bool SnapshotStore::publish(std::shared_ptr<const RoutingSnapshot> snapshot) {
     if (!snapshot) {
         return false;
     }
+    const std::lock_guard lock(publishers_);
+    collect_locked();
     auto observed = acquire();
+    if (snapshot->version() <= observed->version()) return false;
+    // Keep the old version alive before replacing current, even if a worker
+    // releases its reference immediately after the atomic exchange.
+    retired_.push_back(observed);
     while (snapshot->version() > observed->version()) {
 #if defined(__cpp_lib_atomic_shared_ptr) && __cpp_lib_atomic_shared_ptr >= 201711L
         const bool exchanged = current_.compare_exchange_weak(
@@ -87,10 +105,13 @@ bool SnapshotStore::publish(std::shared_ptr<const RoutingSnapshot> snapshot) noe
 }
 
 bool SnapshotStore::publish_if_base(std::shared_ptr<const RoutingSnapshot> snapshot,
-                                   std::uint64_t base_version) noexcept {
+                                   std::uint64_t base_version) {
     if (!snapshot || snapshot->version() <= base_version) return false;
+    const std::lock_guard lock(publishers_);
+    collect_locked();
     auto observed = acquire();
     if (observed->version() != base_version) return false;
+    retired_.push_back(observed);
 #if defined(__cpp_lib_atomic_shared_ptr) && __cpp_lib_atomic_shared_ptr >= 201711L
     return current_.compare_exchange_strong(observed, snapshot,
         std::memory_order_acq_rel, std::memory_order_acquire);
