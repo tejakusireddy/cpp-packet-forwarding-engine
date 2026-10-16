@@ -2,6 +2,7 @@
 
 #include "forwarding/forward.hpp"
 #include "forwarding/spsc_queue.hpp"
+#include "forwarding/snapshot.hpp"
 
 #include <thread>
 #include <vector>
@@ -17,18 +18,22 @@ struct PacketCompletion {
     std::uint64_t id;
     std::vector<std::uint8_t> frame;
     ForwardResult result;
+    std::uint64_t routing_version = 0;
 };
 
 enum class WorkerProgress { progressed, idle, backpressure, stopped };
 
 // One submitting thread, one processing thread, one completion-consuming thread.
-// Tables must outlive the worker and remain unchanged until processing stops.
+// Static tables or the snapshot store must outlive the worker. Static tables
+// must remain unchanged; published snapshots support concurrent replacement.
 // The caller owns the processing thread and must join it before destruction.
 template <std::size_t Capacity>
 class ForwardingWorker {
 public:
     ForwardingWorker(const Fib& fib, const NextHopTable& next_hops) noexcept
-        : fib_(fib), next_hops_(next_hops) {}
+        : fib_(&fib), next_hops_(&next_hops) {}
+
+    explicit ForwardingWorker(const SnapshotStore& snapshots) noexcept : snapshots_(&snapshots) {}
 
     // On false (closed/full), ownership remains with the caller.
     [[nodiscard]] bool try_submit(PacketJob&& packet) noexcept {
@@ -69,8 +74,14 @@ public:
                 }
                 return WorkerProgress::idle;
             }
-            auto result = forward_packet(packet->frame, fib_, next_hops_);
-            pending_.emplace(PacketCompletion{packet->id, std::move(packet->frame), result});
+            // Acquire once so route lookup and adjacency resolution always use
+            // the same version. Results contain values, not snapshot references.
+            const auto snapshot = snapshots_ ? snapshots_->acquire() : nullptr;
+            const auto& fib = snapshot ? snapshot->fib() : *fib_;
+            const auto& next_hops = snapshot ? snapshot->next_hops() : *next_hops_;
+            auto result = forward_packet(packet->frame, fib, next_hops);
+            pending_.emplace(PacketCompletion{packet->id, std::move(packet->frame), result,
+                                              snapshot ? snapshot->version() : 0});
         }
         if (!output_.try_push(std::move(*pending_))) {
             return WorkerProgress::backpressure;
@@ -94,8 +105,9 @@ public:
     }
 
 private:
-    const Fib& fib_;
-    const NextHopTable& next_hops_;
+    const Fib* fib_ = nullptr;
+    const NextHopTable* next_hops_ = nullptr;
+    const SnapshotStore* snapshots_ = nullptr;
     SpscQueue<PacketJob, Capacity> input_;
     SpscQueue<PacketCompletion, Capacity> output_;
     std::optional<PacketCompletion> pending_;

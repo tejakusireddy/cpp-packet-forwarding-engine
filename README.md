@@ -4,8 +4,9 @@ High-performance userspace packet forwarding engine in C++20 with IPv4/IPv6, FIB
 The project is under development. The current implementation provides a
 bounds-checked, allocation-free Ethernet II and IPv4/IPv6 parser and a mutable
 IPv4/IPv6 longest-prefix FIB, resolved next-hop groups, and equal-cost multipath
-selection, in-place frame preparation, and queue-connected forwarding workers.
-Packet transmission and control-plane IPC are planned. No throughput or latency
+selection, in-place frame preparation, queue-connected forwarding workers, and
+versioned routing snapshots. Packet transmission and control-plane IPC are
+planned. No throughput or latency
 claims have been measured yet.
 
 ## Build and test
@@ -73,8 +74,8 @@ as needed; this initial representation has not been validated at million-route
 scale or against the throughput target.
 
 The table supports concurrent readers only when there are no concurrent writes.
-Snapshot publication and worker isolation will be implemented with control-plane
-updates. Tests exercise every prefix length, replacement, deletion, family
+Routing snapshots provide immutable table ownership and atomic publication.
+Tests exercise every prefix length, replacement, deletion, family
 isolation, and 8,000 deterministic randomized updates with 16,000 lookups checked
 against an independent linear reference table.
 
@@ -201,7 +202,8 @@ completion consumer. The submitter and completion consumer may be the same threa
 Call `poll` on the processing thread or call `run` to poll until closed and drained.
 The caller creates and joins the processing thread. Multiple workers can read the
 same FIB and next-hop table, which must remain unchanged and outlive all workers.
-Dynamic routing-table publication is not implemented yet.
+Alternatively, construct workers with a `SnapshotStore` for concurrent publication
+as described below.
 
 When the output queue fills, the worker retains one pending completion and stops
 consuming input until that completion is published. It never forwards a pending
@@ -222,4 +224,41 @@ shutdown behavior, and pass 16,000 mixed IPv4/IPv6 jobs through eight worker thr
 sharing immutable tables. Each completion is checked against direct forwarding,
 including errors and per-worker ordering. This is a correctness test, not evidence
 of eight-core throughput or latency targets. NIC I/O, CPU affinity, packet pools,
-batching, and control-plane publication remain future work.
+batching, and control-plane update transport remain future work.
+
+## Versioned routing snapshots
+
+`forwarding::RoutingSnapshot` builds and owns a complete FIB and next-hop table
+from route and group entries. Its public API exposes only const access. It copies
+input data, rejects invalid prefixes, missing group references, empty groups,
+duplicate group IDs, and duplicate member IDs. Duplicate route prefixes use the
+last entry. A group whose members are all unavailable is valid and yields the
+normal no-available-members resolution error. Failed construction cannot modify
+the published state.
+
+`forwarding::SnapshotStore` starts with empty version zero. `publish` atomically
+replaces both tables only with a strictly newer version; null, stale, and duplicate
+versions are rejected. Concurrent publishers cannot regress the current version.
+Versions are unsigned 64-bit values and do not wrap; reaching the maximum requires
+a new store to start another version sequence.
+
+Readers acquire shared ownership of one immutable snapshot. Old snapshots remain
+valid until the final reader releases them. Workers constructed with a store
+acquire once per processed packet and report that version in `PacketCompletion`.
+Queued packets use the snapshot current at processing time. Pending completions
+retain their original result and version across subsequent publications. Static
+table workers report version zero. Keep the store alive until its workers stop.
+
+Publication uses standard atomic operations on shared pointers, including the
+portable free-function interface supported by the macOS standard library. These
+operations are not guaranteed lock-free. Per-packet reference counting and final
+snapshot reclamation may execute on a forwarding thread. This establishes safe
+publication; reader-side synchronization and reclamation still require performance
+work before claiming isolation at the target throughput or latency.
+
+Updates currently rebuild complete snapshots. Batched incremental updates,
+asynchronous update IPC, and large-table scaling remain to be implemented and
+benchmarked. Tests cover validation, retained-reader lifetime, version boundaries,
+two concurrent publishers with four readers, and worker forwarding during 200
+publications. Another test verifies that backpressured completions keep their
+processing version while newer snapshots are published.

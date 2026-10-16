@@ -19,7 +19,7 @@ struct FibMatch {
 };
 
 // Mutable binary prefix trie. Concurrent readers are supported only while no
-// thread mutates the table. Publication of immutable snapshots belongs to IPC.
+// thread mutates the table. RoutingSnapshot owns tables for atomic publication.
 class Fib {
 public:
     Fib() = default;
