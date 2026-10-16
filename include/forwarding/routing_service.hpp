@@ -2,6 +2,8 @@
 
 #include "forwarding/unix_socket.hpp"
 
+#include <semaphore>
+
 namespace forwarding {
 
 // Optional process-facing adapter. One transport thread owns all queue submission
@@ -26,6 +28,7 @@ private:
     ControlPlane<8> control_;
     std::optional<std::uint32_t> output_interface_;
     std::chrono::milliseconds timeout_;
+    std::binary_semaphore work_{0};
     std::thread control_thread_;
     std::jthread transport_thread_;
 };

@@ -13,11 +13,17 @@ RoutingService::RoutingService(SnapshotStore& store, std::string path,
       output_interface_(output_interface), timeout_(timeout) {
     if (timeout.count() <= 0 || timeout > std::chrono::hours(1))
         throw std::invalid_argument("Routing service timeout must be in (0, 1 hour]");
-    control_thread_ = std::thread([this] { control_.run(); });
+    control_thread_ = std::thread([this] {
+        while (!control_.finished()) {
+            work_.acquire();
+            (void)control_.poll();
+        }
+    });
     try {
         transport_thread_ = std::jthread([this](std::stop_token stop) { serve(stop); });
     } catch (...) {
         control_.close();
+        work_.release();
         control_thread_.join();
         throw;
     }
@@ -55,6 +61,9 @@ void RoutingService::serve(std::stop_token stop) noexcept {
                         if (stop.stop_requested()) throw std::system_error(ECANCELED, std::generic_category());
                         std::this_thread::yield();
                     }
+                    // Exactly one batch is outstanding. Wake the control thread
+                    // once for it; idle routing must not consume a forwarding CPU.
+                    work_.release();
                     // Once submitted, always consume its ack, even during stop.
                     // Otherwise shutdown could strand a backpressured control thread.
                     std::optional<UpdateAck> completed;
@@ -76,6 +85,7 @@ void RoutingService::serve(std::stop_token stop) noexcept {
         }
     }
     control_.close();
+    work_.release();
 }
 
 } // namespace forwarding

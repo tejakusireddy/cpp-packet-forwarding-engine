@@ -91,5 +91,23 @@ void timeout_recovery() {
     auto ack = exchange(next.get(), {0, 1, {}, {}});
     check(ack.status == UpdateStatus::applied, "idle client must not block next connection indefinitely");
 }
+void session_limit() {
+    Directory directory;
+    SnapshotStore store;
+    const auto path = directory.path + "/routing.sock";
+    RoutingService service(store, path);
+    auto client = ipc::UnixConnection::connect(path);
+    for (std::uint64_t version = 1; version <= 64; ++version) {
+        check(exchange(client.get(), {version - 1, version, {}, {}}).status == UpdateStatus::applied,
+              "session request within limit");
+    }
+    bool closed = false;
+    try { (void)exchange(client.get(), {64, 65, {}, {}}); }
+    catch (const std::system_error&) { closed = true; }
+    check(closed && store.acquire()->version() == 64, "session cap must close without applying request 65");
+    auto next = ipc::UnixConnection::connect(path);
+    check(exchange(next.get(), {64, 65, {}, {}}).status == UpdateStatus::applied,
+          "session cap must not stop listener");
 }
-int main() { live_updates(); timeout_recovery(); std::cout << "All routing service tests passed\n"; }
+}
+int main() { live_updates(); timeout_recovery(); session_limit(); std::cout << "All routing service tests passed\n"; }
