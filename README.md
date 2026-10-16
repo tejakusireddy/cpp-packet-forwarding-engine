@@ -27,6 +27,17 @@ cmake --build build-sanitize --parallel
 ctest --test-dir build-sanitize --output-on-failure
 ```
 
+Run race detection in a separate Clang or GCC build:
+
+```sh
+cmake -S . -B build-thread -DCMAKE_BUILD_TYPE=Debug -DENABLE_THREAD_SANITIZER=ON
+cmake --build build-thread --parallel
+ctest --test-dir build-thread --output-on-failure
+```
+
+ThreadSanitizer and address/undefined behavior sanitizers cannot be enabled
+together. Linux CI includes a separate ThreadSanitizer job.
+
 ## Parser contract
 
 `forwarding::parse_packet` accepts a borrowed byte span and returns a packet view
@@ -146,3 +157,32 @@ TTL/hop limit, checksums, IPv6 flow labels, and payload. It is not cryptographic
 The three-argument `forward_packet` overload derives this hash without parsing a
 second time. Tests cover flow fields, ignored fields, seeds, truncation around
 ports, fragment affinity, option offsets, and automatic ECMP integration.
+
+## Worker communication queue
+
+`forwarding::SpscQueue<T, Capacity>` is a bounded, lock-free ring for exactly one
+producer and one consumer. Each queue has `Capacity` usable slots and one spare
+slot to distinguish full from empty. Storage is inline; the queue itself performs
+no dynamic allocation. Element move/destructor operations must not throw, and
+platforms without always-lock-free `size_t` atomics are rejected at compile time.
+Element operations may have their own costs, so use lightweight descriptors for
+worker communication.
+
+`try_push` returns false when full without consuming the supplied value.
+`try_pop` returns an empty optional when empty and transfers ownership otherwise.
+Both operations return immediately without retry loops. Release/acquire ordering
+publishes constructed elements and completed slot reuse. Producer and consumer
+cursors occupy separate 64-byte-aligned storage. Move-only, non-default-constructible
+elements are supported; copy insertion requires a non-throwing copy constructor.
+
+Construct the queue before starting either thread and destroy it only after both
+threads stop. Remaining elements are destroyed with the queue. Multiple producers
+or consumers require separate queues or external synchronization. This queue is
+for threads in one process; shared-memory/process IPC is not implemented.
+Forwarding workers and control-plane update messages are not connected yet.
+
+Tests cover exact capacity, full/empty behavior, repeated wraparound with both
+power-of-two and other capacities, move ownership, element destruction, and
+750,000 ordered multiword messages passed between producer and consumer threads
+across capacities 1, 3, and 1024. These are correctness tests, not throughput
+benchmarks.
