@@ -9,6 +9,10 @@ versioned routing snapshots. Packet transmission and control-plane IPC are
 planned. No throughput or latency
 claims have been measured yet.
 
+The benchmark executable now produces measured JSON for in-memory core and queued
+workloads. Follow [the benchmark protocol](docs/benchmarking.md) before interpreting
+those results; Linux wire-level targets remain unverified.
+
 On Linux, an AF_PACKET reference backend supplies nonblocking receive/transmit,
 MTU checks, minimum Ethernet padding, and optional worker affinity. It requires
 `CAP_NET_RAW`; the portable build excludes its Linux-specific source.
@@ -340,3 +344,15 @@ Pinning to an unavailable CPU is an explicit error. No affinity is imposed on
 the user's machine by default. Linux CI runs the raw-socket loopback integration
 test with privileges, checking receive/transmit, padding, and output MTU rejection.
 Ordinary unprivileged CTest runs skip that test when `CAP_NET_RAW` is unavailable.
+
+## Benchmarks
+
+```sh
+./build/forwarding_bench --mode queued --workers 8 --packets 1000000 \
+  --routes 1000000 --updates 100000 --batch 512
+```
+
+The JSON separates FIB construction, forwarding rate, sampled p99 latency, update
+rate, and peak RSS. `core` measures direct calls with a small active working set;
+`queued` includes dispatcher/worker queues and walks the configured route table.
+Neither includes NIC I/O. Read [measurement boundaries and reproduction steps](docs/benchmarking.md).
