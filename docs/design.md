@@ -135,6 +135,7 @@ latency includes scheduling and queue residence. Update rate currently excludes
 process serialization and is measured separately from forwarding. Every saved
 result identifies its mode, platform, revision, command, and sample count.
 
-The remaining gates are Linux build/integration execution, Linux NIC benchmarks,
-simultaneous forwarding/update measurements, and queued/wire p99 below 10µs on a
-documented eight-core setup. Passing local correctness tests does not close them.
+Linux builds and loopback/veth integration now pass in CI. The remaining gates are
+Linux NIC benchmarks, simultaneous forwarding/update measurements, and queued/wire
+p99 below 10µs on a documented eight-core setup. Passing correctness tests does
+not close those performance gates.

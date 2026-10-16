@@ -8,11 +8,22 @@ arm64 with Apple Clang 17. Tests cover packet bounds, reference-checked LPM, ECM
 unchanged rejected frames, fragment hashing, SPSC publication, worker ownership,
 snapshot concurrency/reclamation, transactional updates, and Unix process IPC.
 
-The Linux runtime source has passed a local C++ syntax check against its portable
-declarations. Its Linux-only backend requires a Linux compiler/runtime. Loopback
-and dual-stack veth jobs are configured in CI but have not been executed locally.
-Docker Desktop is installed; its daemon remained unavailable after launch was
-requested. No Linux success is inferred from the macOS test results.
+## Linux CI correctness
+
+[Pull-request run 38966703953](https://github.com/tejakusireddy/cpp-packet-forwarding-engine/actions/runs/38966703953)
+passed all six jobs at revision `ad96b0fcfd5531c7eb819cfcf9804d4f479ec2dc` on
+October 16, 2026. The matching push run also passed. GCC and Clang passed ordinary
+and address/undefined-behavior builds; the separate ThreadSanitizer job passed.
+All twelve portable CTest cases passed in each job. The thirteenth raw-socket case
+was explicitly skipped without privileges and then passed in the dedicated
+privileged loopback job. That job also passed IPv4/IPv6 forwarding through two
+veth pairs in an isolated network namespace, checking MAC addresses, TTL/hop limit,
+IPv4 checksum, payload, padding, and clean shutdown.
+
+The initial Linux failure was a missing direct `<algorithm>` include in IPC tests.
+The fix adds declaring headers explicitly rather than relying on macOS transitive
+includes. All twelve public headers also compile independently with local Clang.
+Linux correctness validation does not establish Linux NIC performance.
 
 ## Saved benchmark sweep
 
@@ -55,7 +66,7 @@ the project target. Raw repetitions remain committed so variance is visible.
 | 100K+ updates/s | Async control queue, incremental snapshots, separate update phase | Exceeded locally; Linux/process-inclusive rate unverified |
 | 5M+ packets/s across eight cores | Eight worker threads exceed rate in queued macOS benchmark | Linux eight-dedicated-core/wire claim unverified |
 | Sub-10µs p99 forwarding latency | Core calls satisfy it; queued path exceeds it | Not met for queued/end-to-end path |
-| Linux receive/transmit correctness | Loopback/veth CI jobs prepared | Execution pending |
+| Linux receive/transmit correctness | Privileged loopback and dual-stack veth CI jobs passed | Verified for reference integration workload |
 | Forwarding isolation under sustained updates | Concurrency correctness tests | Simultaneous performance measurement pending |
 
 ## Next performance experiments
