@@ -47,9 +47,10 @@ flowchart LR
     D --> O[Linux egress]
 ```
 
-The IPC adapter is a library capability; the reference executable installs static
-startup routes and does not expose a routing-process listener. Tests exercise IPC
-across a real process boundary and concurrent snapshot updates separately.
+The reference executable installs startup routes and optionally starts a private
+Unix routing listener with `--control PATH`. A transport thread sends requests to
+the control queue; a separate control thread builds and publishes snapshots while
+packet workers continue forwarding. The `route_ctl` client returns typed acknowledgments.
 
 A packet follows this path:
 
@@ -88,6 +89,8 @@ The [IPC protocol](docs/ipc-protocol.md) specifies every wire field.
 | Snapshots | `src/snapshot.cpp` | Publish consistent tables; reclaim outside forwarding |
 | Control batches | `include/forwarding/control.hpp` | All-or-nothing updates and ordered acknowledgments |
 | Process transport | `src/ipc.cpp` | Bounded, versioned, portable wire representation |
+| Live routing | `src/unix_socket.cpp`, `src/routing_service.cpp` | Private listener, deadlines, and control-thread isolation |
+| Routing client | `src/routing_request.cpp`, `src/route_ctl.cpp` | Strict parsing and explicit version/conflict handling |
 | Linux runtime | `src/linux_io.cpp`, `src/main.cpp` | Auditable packet I/O and flow dispatch |
 | Measurement | `benchmarks/forwarding_bench.cpp` | Separate core, queue, route-scale, and update costs |
 
@@ -115,6 +118,45 @@ and requested unavailable CPUs cause startup failure. SIGINT/SIGTERM stops input
 and drains accepted jobs. The veth test creates a temporary namespace, checks IPv4
 and IPv6 forwarding, and removes the namespace on exit.
 
+## Change routes while forwarding
+
+Create a private directory owned by the account running the forwarder. The
+listener refuses an existing socket or file rather than deleting it:
+
+```sh
+sudo install -d -m 700 /run/pfe
+sudo ./build/packet_forwarder IN_INTERFACE OUT_INTERFACE aa:bb:cc:dd:ee:ff 8 \
+  --control /run/pfe/routing.sock --control-timeout-ms 1000
+```
+
+The initial version is 1, with IPv4/IPv6 defaults using group 0. From another
+terminal, submit changes with their expected base and new version:
+
+```sh
+sudo ./build/route_ctl /run/pfe/routing.sock 1 2 erase 0.0.0.0/0
+sudo ./build/route_ctl /run/pfe/routing.sock 2 3 upsert 0.0.0.0/0 0
+sudo ./build/route_ctl /run/pfe/routing.sock 3 4 upsert 2001:db8::/32 0
+```
+
+The client prints JSON containing requested version, current version, and status.
+Exit codes are 0 applied, 1 rejected, 2 invalid command, and 3 transport/protocol
+failure. `route_ctl --help` also describes single-member group updates. Group
+updates must use the runtime's output interface index; they can change its
+resolved MAC addresses or availability. Prefix changes may reference installed groups.
+
+The socket is mode 0600 under a private directory, with one active client and a
+listen backlog of four. Each connection accepts at most 64 requests; every message
+has an absolute I/O deadline. The default server timeout is one second. Slow,
+malformed, or disconnected clients are closed without stopping the listener.
+An applied batch may have lost its acknowledgment after a disconnect; clients
+must inspect version/conflict responses rather than automatically replaying it.
+Acknowledgment confirms publication, not completion of all in-flight packet work.
+
+Shutdown cancels socket waits, drains accepted control batches, then drains packet
+workers. The listener removes only its own socket entry. After a crash, inspect
+and remove a stale socket manually once no process is listening. See
+[the protocol and lifecycle contract](docs/ipc-protocol.md).
+
 ## Performance evidence
 
 ```sh
@@ -137,8 +179,8 @@ The [validation report](docs/validation.md) records measured results and remaini
   ARP/ND, weighted/resilient ECMP, or transport checksum validation.
 - SPSC queues are lock-free on supported targets. Snapshot shared-pointer operations
   are not guaranteed lock-free. Slow readers can retain old routing memory.
-- Process IPC has bounded framing and typed acknowledgments; embedding applications
-  supply listener permissions, peer checks, timeouts, and reconnect policy.
+- Process IPC uses filesystem ownership as its local authorization boundary. It
+  does not expose a network listener or implement automatic retry after lost acks.
 - AF_PACKET is a syscall-based reference backend. Packet rings, NIC steering,
   batched socket I/O, and wire-level performance validation remain future work.
 - Million-route scale and update throughput have local benchmark evidence. The

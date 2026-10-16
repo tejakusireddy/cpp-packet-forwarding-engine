@@ -12,3 +12,5 @@ for interface in ingress source egress sink lo; do
   ip netns exec "$namespace" ip link set "$interface" up
 done
 ip netns exec "$namespace" python3 "$workspace/tests/linux_forwarding.py" "$workspace/build/packet_forwarder"
+ip netns exec "$namespace" python3 "$workspace/tests/linux_forwarding.py" \
+  "$workspace/build/packet_forwarder" "$workspace/build/route_ctl"
