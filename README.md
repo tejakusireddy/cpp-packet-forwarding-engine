@@ -3,8 +3,9 @@ High-performance userspace packet forwarding engine in C++20 with IPv4/IPv6, FIB
 
 The project is under development. The current implementation provides a
 bounds-checked, allocation-free Ethernet II and IPv4/IPv6 parser and a mutable
-IPv4/IPv6 longest-prefix FIB. Forwarding, ECMP, and control-plane IPC are planned. No throughput or latency
-claims have been measured yet.
+IPv4/IPv6 longest-prefix FIB, resolved next-hop groups, and equal-cost multipath
+selection. Packet transmission, multicore workers, and control-plane IPC are
+planned. No throughput or latency claims have been measured yet.
 
 ## Build and test
 
@@ -53,8 +54,8 @@ IPv6, including independent default routes. IPv4 addresses use the first four
 bytes of the same 16-byte address representation returned by the parser.
 
 Lookup returns the longest matching prefix length and a next-hop group ID, or
-an empty optional if no route matches. Group IDs are opaque values; next-hop
-resolution and ECMP membership are not implemented yet. Lookup performs no
+an empty optional if no route matches. Group IDs refer to entries in the next-hop
+table described below. Lookup performs no
 allocations and traverses at most 32 or 128 address bits. Updates allocate nodes
 as needed; this initial representation has not been validated at million-route
 scale or against the throughput target.
@@ -64,3 +65,32 @@ Snapshot publication and worker isolation will be implemented with control-plane
 updates. Tests exercise every prefix length, replacement, deletion, family
 isolation, and 8,000 deterministic randomized updates with 16,000 lookups checked
 against an independent linear reference table.
+
+## Next-hop resolution and ECMP
+
+`forwarding::NextHopTable` maps group IDs to resolved Ethernet adjacencies:
+member ID, output interface ID, source MAC, destination MAC, and availability.
+The control plane must supply these values; ARP/neighbor discovery and interface
+validation are not implemented. IDs are opaque and may be zero.
+
+Group updates copy their input and replace the group in full. Empty groups and
+duplicate member IDs are rejected without modifying the table. Unavailable
+members are excluded during updates, leaving no per-packet member scan.
+Groups with all members unavailable remain present and return an explicit error.
+
+Resolution performs a longest-prefix lookup and selects an available member by
+mixing a caller-supplied 64-bit flow hash and taking its remainder over the active
+member count. The caller must use a stable hash for packets in the same flow;
+packet-to-flow hashing is not implemented yet. Selection is deterministic for a
+fixed hash and ordered active membership. Membership, ordering, or availability
+changes may remap flows. Weighted and resilient ECMP are not implemented.
+
+Results copy the matched prefix and selected adjacency without allocating.
+Missing routes, missing groups, and groups without available members have distinct
+errors. Resolution does not fall back to a less-specific route after finding a
+route with an unusable group. Concurrent resolution requires both tables to remain
+unchanged. This step does not decrement TTL/hop limit, rewrite frames, or transmit.
+
+Tests cover parser-to-adjacency resolution for both address families, group
+replacement and removal, failure paths, flow affinity, deterministic selection,
+and distribution over 100,000 synthetic flow hashes.
