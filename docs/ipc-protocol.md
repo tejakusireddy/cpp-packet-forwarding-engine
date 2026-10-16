@@ -67,6 +67,18 @@ UID; the socket is mode 0600. Startup never removes an existing path. Cleanup
 checks device/inode identity before unlinking its own socket. `UnixConnection`
 owns client/accepted descriptors, sets close-on-exec, and supports bounded connect.
 
-An embedding process supplies listeners, file permissions, peer checks, deadlines,
-and reconnect policy. Close after malformed framing, EOF, or partial transfer error.
+`RoutingService` integrates the listener with `ControlPlane<8>`. It serves one
+active connection, up to 64 sequential messages per connection, with a default
+one-second receive/send deadline per message. A different application can use the
+lower-level transport independently. The runtime's optional output-interface
+policy returns an invalid acknowledgment for groups using an unconfigured egress.
+
+Shutdown cancels blocked socket operations and consumes acknowledgments for any
+already-submitted batch before closing the control queue and joining its thread.
+No accepted batch is automatically replayed on reconnect. Publication can have
+succeeded even if delivery of its acknowledgment fails. The caller must use the
+reported base/current versions to resolve uncertainty. There is no query opcode;
+a rejected stale-base response includes the current version.
+
+Close after malformed framing, EOF, or partial transfer error.
 Neither malformed input nor a failed batch may alter the published snapshot.

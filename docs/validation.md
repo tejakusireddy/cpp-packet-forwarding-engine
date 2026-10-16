@@ -2,7 +2,7 @@
 
 ## Local correctness
 
-The portable build has ten component suites and two benchmark smoke tests. Release,
+The portable build has thirteen component suites and two benchmark smoke tests. Release,
 AddressSanitizer/UndefinedBehaviorSanitizer, and ThreadSanitizer runs pass on macOS
 arm64 with Apple Clang 17. Tests cover packet bounds, reference-checked LPM, ECMP,
 unchanged rejected frames, fragment hashing, SPSC publication, worker ownership,
@@ -24,6 +24,15 @@ The initial Linux failure was a missing direct `<algorithm>` include in IPC test
 The fix adds declaring headers explicitly rather than relying on macOS transitive
 includes. All twelve public headers also compile independently with local Clang.
 Linux correctness validation does not establish Linux NIC performance.
+
+[Live-routing run 38970433708](https://github.com/tejakusireddy/cpp-packet-forwarding-engine/actions/runs/38970433708)
+also passed every job for the listener/client/runtime integration. GCC/Clang,
+sanitizer, and ThreadSanitizer jobs passed fifteen portable cases (plus the
+unprivileged raw-socket skip). The privileged veth test kept one forwarder alive
+while the client removed and restored its IPv4 default, installed a new adjacency
+and host route, rejected stale/missing-group/wrong-egress requests, and verified
+unchanged IPv6 forwarding. Shutdown with an idle routing client removed the socket.
+These demonstrate live-update correctness rather than sustained update throughput.
 
 ## Saved benchmark sweep
 
@@ -61,7 +70,7 @@ the project target. Raw repetitions remain committed so variance is visible.
 | Ethernet/IPv4/IPv6 parsing and forwarding preparation | Portable correctness/sanitizer tests | Implemented within documented header limits |
 | Longest-prefix lookup, next-hop resolution, ECMP | Reference and integration tests | Implemented |
 | Multicore worker queues | Eight-thread ordering/ownership tests | Implemented |
-| Versioned batched asynchronous updates and IPC | Concurrent tests and forked-process exchange | Implemented library; runtime listener not integrated |
+| Versioned batched asynchronous updates and IPC | Concurrent tests, forked-process exchange, live-service tests | Implemented library and optional runtime listener |
 | 1M+ routes | One million distinct IPv4 routes in saved runs | Demonstrated locally for that route distribution |
 | 100K+ updates/s | Async control queue, incremental snapshots, separate update phase | Exceeded locally; Linux/process-inclusive rate unverified |
 | 5M+ packets/s across eight cores | Eight worker threads exceed rate in queued macOS benchmark | Linux eight-dedicated-core/wire claim unverified |

@@ -109,10 +109,26 @@ C++ object layouts. Framing and counts are bounded before processing. Reserved
 fields must be zero so future extensions cannot be silently misinterpreted.
 Protocol parsing happens on a transport/control thread, not a forwarding worker.
 
-The transport handles interrupted and partial I/O. The embedding application owns
-listener permissions, peer authorization, timeouts, and reconnect policy. This
-keeps deployment policy out of the packet path. The reference executable currently
-uses static startup routes; its IPC listener remains an integration task.
+The transport handles interrupted/partial I/O with one absolute deadline across
+prefix and payload. The optional runtime listener requires a private owner-only
+directory and creates a mode-0600 socket. Filesystem ownership is the authorization
+boundary; routing clients are trusted local processes under that account.
+
+One transport thread handles one active client, with a four-connection backlog
+and a 64-message session cap. A separate control thread performs snapshot work and
+sleeps on a semaphore while no batch is queued.
+This preserves the SPSC queue roles and bounds simultaneous buffering without a
+thread-per-client design. Head-of-line blocking is an explicit tradeoff, bounded
+by the message deadline and session cap. The service rejects group members that
+refer to an output interface outside the reference runtime's single configured
+egress. Packet workers perform no socket I/O or command parsing.
+
+Shutdown cancels readiness polling, drains any accepted batch acknowledgment, and
+joins transport/control threads. A disconnected sender may not know whether its
+batch was published. Explicit versions allow detecting conflicts; the client does
+not automatically retry a possibly applied update. Socket cleanup checks inode
+identity and does not unlink existing paths at startup, avoiding takeover of an
+unrelated file or another running service.
 
 ## 9. Linux packet sockets establish a reference path
 
