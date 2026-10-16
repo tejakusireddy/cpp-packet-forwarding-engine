@@ -264,6 +264,45 @@ the stream; retrying on a desynchronized connection is unsafe.
 randomized input, disconnected peers, SIGPIPE handling, and a forked routing process
 that submits a batch and receives an applied acknowledgment.
 
+### Listener and live service
+
+`socket_wait.hpp` computes a steady-clock deadline and polls readiness in intervals
+of at most 20ms. It checks cancellation and the absolute deadline before each wait.
+Prefix and payload transfers share that deadline, so a client cannot extend the
+operation indefinitely by trickling bytes. `MSG_DONTWAIT` keeps each syscall
+nonblocking after readiness. Deadline/cancellation errors invalidate the stream.
+
+`unix_socket.cpp` owns descriptors with `UnixConnection`. Client connect checks
+completion with `SO_ERROR` after readiness. `UnixListener` validates a private
+parent, binds without deleting existing entries, sets socket permissions, listens
+with backlog four, and records the filesystem device/inode. Nonblocking accept
+returns an owned connection or no work. Destruction unlinks only the recorded
+socket, preserving any file that replaced that path.
+
+`RoutingService` owns one transport thread and one control thread. Construction
+binds before starting threads; partial startup failure closes/joins the control
+thread. A binary semaphore wakes the control thread for one submitted batch or
+shutdown; it blocks while idle instead of consuming a CPU. Exactly one request
+is outstanding, so each wakeup maps to one poll and acknowledgment. `serve`
+accepts one client and processes at most 64 requests before closing
+the session. It checks the configured egress policy, submits an allowed batch,
+consumes exactly its acknowledgment, and sends the response. Once accepted by the
+control queue, a batch is drained even during shutdown. A malformed or timed-out
+connection closes independently; the listener continues accepting other clients.
+`stop` requests transport cancellation and joins transport before control.
+
+`routing_service_tests.cpp` checks persistent sessions, actual worker version/MAC
+changes, invalid/stale rejection, egress policy, malformed peers, timeout recovery,
+idle-client shutdown, and socket cleanup. `unix_socket_tests.cpp` covers endpoint
+ownership, path collisions, private permissions, deadlines, and cancellation.
+
+`parse_routing_request` parses strict unsigned version/group/interface values,
+IPv4/IPv6 CIDRs with `inet_pton`, MAC pairs, and 0/1 availability. No socket opens
+until parsing succeeds. `route_ctl` connects, sends one batch, verifies the ack's
+version, and prints JSON with a typed status. Its exit code distinguishes applied,
+rejected, malformed command, and transport failure. `routing_request_tests.cpp`
+checks malformed fields, address-family limits, and full-width 64-bit versions.
+
 ## 12. Linux reference path: `linux_io.cpp` and `main.cpp`
 
 `PacketSocket` validates an interface name, resolves its index, opens a nonblocking
@@ -275,17 +314,22 @@ for short frames, selects the bound output interface, and returns false for
 temporary socket pressure. `pin_current_thread` makes requested affinity explicit.
 
 The executable parses interface/MAC/worker/count/CPU arguments, installs two default
-routes, starts workers, and preallocates buffers. A dispatcher receives one pending
+routes, optionally starts `RoutingService` with `--control`, starts workers, and
+preallocates buffers. A dispatcher receives one pending
 input, hashes it to a worker, consumes completions, retries blocked transmissions,
 and recycles buffers. Output MTU violations and forwarding errors count as drops.
-Normal signals stop reception and drain accepted work. `Workers` also closes,
+Normal signals stop reception, cancel routing sessions, drain accepted control
+batches, then drain accepted packet work. `Workers` also closes,
 drains, and joins threads during exception cleanup so joinable destructors do not
 terminate the program. Exceptional cleanup may discard completions because normal
 transmission is no longer possible.
 
 `linux_io_tests.cpp` checks raw loopback and padding. `linux_integration.sh` creates
 an isolated namespace; `linux_forwarding.py` sends valid IPv4 and IPv6 packets
-through veth links and checks the output. These require Linux privileges and are
+through veth links and checks the output. Its live mode invokes `route_ctl` while
+the same runtime stays active: erase/reinsert a default, add a new group and host
+route, verify the changed Ethernet destination, reject stale/invalid requests, and
+shutdown with an idle routing client. These require Linux privileges and are
 not exercised by portable macOS CTest runs.
 
 ## 13. Evidence: `benchmarks/forwarding_bench.cpp` and `scripts/benchmark.py`

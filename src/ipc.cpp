@@ -1,4 +1,5 @@
 #include "forwarding/ipc.hpp"
+#include "socket_wait.hpp"
 
 #include <cerrno>
 #include <system_error>
@@ -35,7 +36,8 @@ void header(Reader& reader, std::uint32_t magic) {
     if (reader.get(4) != magic || reader.get(2) != 1) throw std::invalid_argument("Unsupported IPC protocol");
     reader.zero(2);
 }
-void transfer(int socket, std::span<std::uint8_t> bytes, bool writing) {
+void transfer(int socket, std::span<std::uint8_t> bytes, bool writing,
+              detail::Clock::time_point until, std::stop_token stop) {
 #if defined(SO_NOSIGPIPE)
     if (writing) {
         const int enabled = 1;
@@ -45,37 +47,40 @@ void transfer(int socket, std::span<std::uint8_t> bytes, bool writing) {
 #endif
     std::size_t done = 0;
     while (done < bytes.size()) {
+        detail::wait_ready(socket, writing ? POLLOUT : POLLIN, until, stop);
         ssize_t count;
         if (writing) {
 #if defined(MSG_NOSIGNAL)
-            constexpr int flags = MSG_NOSIGNAL;
+            constexpr int flags = MSG_NOSIGNAL | MSG_DONTWAIT;
 #else
-            constexpr int flags = 0;
+            constexpr int flags = MSG_DONTWAIT;
 #endif
             count = send(socket, bytes.data() + done, bytes.size() - done, flags);
         } else {
-            count = recv(socket, bytes.data() + done, bytes.size() - done, 0);
+            count = recv(socket, bytes.data() + done, bytes.size() - done, MSG_DONTWAIT);
         }
-        if (count < 0 && errno == EINTR) continue;
+        if (count < 0 && (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)) continue;
         if (count < 0) throw std::system_error(errno, std::generic_category(), "IPC transfer");
         if (count == 0) throw std::system_error(ECONNRESET, std::generic_category(), "IPC peer closed");
         done += static_cast<std::size_t>(count);
     }
 }
-void send_message(int socket, std::vector<std::uint8_t> bytes) {
+void send_message(int socket, std::vector<std::uint8_t> bytes, IoOptions options) {
+    const auto until = detail::deadline(options);
     Writer length;
     length.put(bytes.size(), 4);
-    transfer(socket, length.bytes, true);
-    transfer(socket, bytes, true);
+    transfer(socket, length.bytes, true, until, options.stop);
+    transfer(socket, bytes, true, until, options.stop);
 }
-std::vector<std::uint8_t> receive_message(int socket) {
+std::vector<std::uint8_t> receive_message(int socket, IoOptions options) {
+    const auto until = detail::deadline(options);
     std::array<std::uint8_t, 4> prefix{};
-    transfer(socket, prefix, false);
+    transfer(socket, prefix, false, until, options.stop);
     Reader reader{prefix};
     const auto size = reader.get(4);
     if (size == 0 || size > max_message_size) throw std::invalid_argument("Invalid IPC length");
     std::vector<std::uint8_t> bytes(static_cast<std::size_t>(size));
-    transfer(socket, bytes, false);
+    transfer(socket, bytes, false, until, options.stop);
     return bytes;
 }
 } // namespace
@@ -151,17 +156,17 @@ UpdateBatch decode(std::span<const std::uint8_t> message) {
     return batch;
 }
 
-void send_batch(int socket, const UpdateBatch& batch) { send_message(socket, encode(batch)); }
-UpdateBatch receive_batch(int socket) { return decode(receive_message(socket)); }
-void send_ack(int socket, const UpdateAck& ack) {
+void send_batch(int socket, const UpdateBatch& batch, IoOptions options) { send_message(socket, encode(batch), options); }
+UpdateBatch receive_batch(int socket, IoOptions options) { return decode(receive_message(socket, options)); }
+void send_ack(int socket, const UpdateAck& ack, IoOptions options) {
     Writer out;
     header(out, 0x41434b31);
     out.put(ack.version, 8); out.put(ack.current_version, 8);
     out.put(static_cast<std::uint8_t>(ack.status), 1); out.put(0, 7);
-    send_message(socket, std::move(out.bytes));
+    send_message(socket, std::move(out.bytes), options);
 }
-UpdateAck receive_ack(int socket) {
-    const auto message = receive_message(socket);
+UpdateAck receive_ack(int socket, IoOptions options) {
+    const auto message = receive_message(socket, options);
     Reader in{message};
     header(in, 0x41434b31);
     UpdateAck ack{};
