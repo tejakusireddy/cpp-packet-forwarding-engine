@@ -19,6 +19,11 @@ struct NextHopGroup {
     std::vector<NextHop> members;
 };
 
+struct RouteUpdate {
+    RouteEntry route;
+    bool remove = false;
+};
+
 // Owns both tables without exposing mutation. Construction copies supplied data;
 // invalid prefixes, missing groups, or invalid/duplicate groups throw
 // std::invalid_argument. Repeated route prefixes use the last supplied entry.
@@ -26,6 +31,11 @@ class RoutingSnapshot {
 public:
     RoutingSnapshot(std::uint64_t version, std::span<const RouteEntry> routes,
                     std::span<const NextHopGroup> groups);
+    // Incremental version: shares unchanged FIB nodes, copies the group table,
+    // upserts groups, then applies route changes in order. Missing deletes are
+    // idempotent. Group deletion requires a complete replacement snapshot.
+    RoutingSnapshot(std::uint64_t version, const RoutingSnapshot& base,
+                    std::span<const RouteUpdate> updates, std::span<const NextHopGroup> groups);
     [[nodiscard]] std::uint64_t version() const noexcept { return version_; }
     [[nodiscard]] const Fib& fib() const noexcept { return fib_; }
     [[nodiscard]] const NextHopTable& next_hops() const noexcept { return next_hops_; }

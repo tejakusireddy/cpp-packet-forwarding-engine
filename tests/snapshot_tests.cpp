@@ -129,6 +129,26 @@ void concurrent_publication() {
     check(store.acquire()->version() == 400, "latest version missing after publisher race");
 }
 
+void incremental() {
+    const auto base = snapshot(1);
+    const IpAddress host{192, 0, 2, 1};
+    std::array changes{RouteUpdate{RouteEntry{IpVersion::v4, host, 32, 1}}};
+    const RoutingSnapshot added(2, *base, changes, {});
+    check(added.fib().size() == 3 && base->fib().size() == 2, "incremental isolation");
+    check(added.fib().lookup(IpVersion::v4, host) == FibMatch{1, 32}, "incremental upsert");
+    changes[0].remove = true;
+    const RoutingSnapshot removed(3, added, changes, {});
+    check(removed.fib().lookup(IpVersion::v4, host) == FibMatch{1, 0}, "incremental delete");
+    check(added.fib().lookup(IpVersion::v4, host) == FibMatch{1, 32}, "delete changed base");
+    const RoutingSnapshot absent(4, removed, changes, {});
+    check(absent.fib().size() == 2, "idempotent delete");
+    invalid([&] { RoutingSnapshot bad(1, *base, {}, {}); });
+    changes[0].remove = false;
+    changes[0].route.next_hop_group = 99;
+    invalid([&] { RoutingSnapshot bad(2, *base, changes, {}); });
+    verify(base);
+}
+
 PacketJob packet(std::uint64_t id) {
     std::vector<std::uint8_t> frame(58, 0);
     frame[12] = 0x86;
@@ -206,6 +226,7 @@ void worker_updates() {
 int main() {
     validation_and_lifetime();
     concurrent_publication();
+    incremental();
     worker_updates();
     std::cout << "All routing snapshot tests passed\n";
 }

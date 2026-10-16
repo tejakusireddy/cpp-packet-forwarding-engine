@@ -256,9 +256,12 @@ snapshot reclamation may execute on a forwarding thread. This establishes safe
 publication; reader-side synchronization and reclamation still require performance
 work before claiming isolation at the target throughput or latency.
 
-Updates currently rebuild complete snapshots. Batched incremental updates,
-asynchronous update IPC, and large-table scaling remain to be implemented and
-benchmarked. Tests cover validation, retained-reader lifetime, version boundaries,
+Incremental snapshots share unchanged FIB nodes and copy a trie path only when
+an update touches a shared node. A fresh table still mutates uniquely owned nodes
+in place. Group metadata is copied per snapshot. Route changes are ordered;
+deletion of a missing prefix is idempotent. Group deletion uses a full replacement
+snapshot. Asynchronous update transport and large-table scaling remain to be
+validated. Tests cover validation, retained-reader lifetime, version boundaries,
 two concurrent publishers with four readers, and worker forwarding during 200
 publications. Another test verifies that backpressured completions keep their
 processing version while newer snapshots are published.

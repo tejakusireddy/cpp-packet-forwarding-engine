@@ -24,6 +24,36 @@ RoutingSnapshot::RoutingSnapshot(std::uint64_t version, std::span<const RouteEnt
     }
 }
 
+RoutingSnapshot::RoutingSnapshot(std::uint64_t version, const RoutingSnapshot& base,
+                                 std::span<const RouteUpdate> updates,
+                                 std::span<const NextHopGroup> groups)
+    : version_(version), fib_(base.fib_), next_hops_(base.next_hops_) {
+    if (version <= base.version()) {
+        throw std::invalid_argument("Incremental version must exceed base version");
+    }
+    std::unordered_set<std::uint32_t> ids;
+    for (const auto& group : groups) {
+        if (!ids.insert(group.id).second || !next_hops_.upsert(group.id, group.members)) {
+            throw std::invalid_argument("Invalid or duplicate next-hop group");
+        }
+    }
+    for (const auto& update : updates) {
+        const auto& route = update.route;
+        const auto bits = route.family == IpVersion::v4 ? 32U :
+                          route.family == IpVersion::v6 ? 128U : 0U;
+        if (bits == 0 || route.prefix_length > bits) {
+            throw std::invalid_argument("Invalid route prefix");
+        }
+        if (update.remove) {
+            (void)fib_.erase(route.family, route.prefix, route.prefix_length);
+        } else if (!next_hops_.contains(route.next_hop_group)) {
+            throw std::invalid_argument("Route references a missing next-hop group");
+        } else {
+            (void)fib_.insert(route.family, route.prefix, route.prefix_length, route.next_hop_group);
+        }
+    }
+}
+
 SnapshotStore::SnapshotStore()
     : current_(std::make_shared<const RoutingSnapshot>(
           0, std::span<const RouteEntry>{}, std::span<const NextHopGroup>{})) {}
