@@ -1,8 +1,10 @@
 #include "forwarding/ipc.hpp"
 
+#include <algorithm>
 #include <cstdlib>
 #include <iostream>
 #include <random>
+#include <system_error>
 #include <sys/socket.h>
 #include <sys/wait.h>
 #include <unistd.h>

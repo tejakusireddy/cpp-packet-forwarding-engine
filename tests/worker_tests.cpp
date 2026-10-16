@@ -1,6 +1,7 @@
 #include "forwarding/worker.hpp"
 #include "forwarding/packet_pool.hpp"
 
+#include <algorithm>
 #include <cstdlib>
 #include <iostream>
 #include <memory>
