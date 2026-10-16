@@ -86,4 +86,18 @@ bool SnapshotStore::publish(std::shared_ptr<const RoutingSnapshot> snapshot) noe
     return false;
 }
 
+bool SnapshotStore::publish_if_base(std::shared_ptr<const RoutingSnapshot> snapshot,
+                                   std::uint64_t base_version) noexcept {
+    if (!snapshot || snapshot->version() <= base_version) return false;
+    auto observed = acquire();
+    if (observed->version() != base_version) return false;
+#if defined(__cpp_lib_atomic_shared_ptr) && __cpp_lib_atomic_shared_ptr >= 201711L
+    return current_.compare_exchange_strong(observed, snapshot,
+        std::memory_order_acq_rel, std::memory_order_acquire);
+#else
+    return std::atomic_compare_exchange_strong_explicit(&current_, &observed, snapshot,
+        std::memory_order_acq_rel, std::memory_order_acquire);
+#endif
+}
+
 } // namespace forwarding

@@ -59,6 +59,9 @@ public:
     [[nodiscard]] std::shared_ptr<const RoutingSnapshot> acquire() const noexcept;
     // Null, equal, and older versions are rejected, leaving the store unchanged.
     [[nodiscard]] bool publish(std::shared_ptr<const RoutingSnapshot> snapshot) noexcept;
+    // Publish only if the current version still equals the batch's base.
+    [[nodiscard]] bool publish_if_base(std::shared_ptr<const RoutingSnapshot> snapshot,
+                                       std::uint64_t base_version) noexcept;
 
 private:
 #if defined(__cpp_lib_atomic_shared_ptr) && __cpp_lib_atomic_shared_ptr >= 201711L

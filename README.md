@@ -180,7 +180,7 @@ Construct the queue before starting either thread and destroy it only after both
 threads stop. Remaining elements are destroyed with the queue. Multiple producers
 or consumers require separate queues or external synchronization. This queue is
 for threads in one process; shared-memory/process IPC is not implemented.
-Control-plane update messages are not connected yet.
+Control-plane batches use a separate queue pair described below.
 
 Tests cover exact capacity, full/empty behavior, repeated wraparound with both
 power-of-two and other capacities, move ownership, element destruction, and
@@ -265,3 +265,20 @@ validated. Tests cover validation, retained-reader lifetime, version boundaries,
 two concurrent publishers with four readers, and worker forwarding during 200
 publications. Another test verifies that backpressured completions keep their
 processing version while newer snapshots are published.
+
+## Asynchronous control plane
+
+`ControlPlane<Capacity>` accepts owned `UpdateBatch` objects through an SPSC queue
+and returns ordered acknowledgments through another. A batch carries its expected
+base version, new version, ordered route inserts/deletes, and group upserts.
+One control thread validates and builds an incremental snapshot, then publishes
+only if the expected base is still current. This prevents a stale batch from
+overwriting an intervening publisher even when its proposed version is higher.
+Validation or allocation failures leave the current snapshot unchanged.
+
+Acknowledgments distinguish applied, stale-base, invalid, and resource-exhausted
+batches. Output backpressure holds one pending acknowledgment without applying
+the batch again. Close, receive, drain, and join follow the worker lifecycle.
+This is asynchronous communication between threads in one process. A Unix socket
+transport is needed for an external routing process. There is no update-rate
+performance claim yet.
