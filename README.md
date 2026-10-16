@@ -283,8 +283,8 @@ Validation or allocation failures leave the current snapshot unchanged.
 Acknowledgments distinguish applied, stale-base, invalid, and resource-exhausted
 batches. Output backpressure holds one pending acknowledgment without applying
 the batch again. Close, receive, drain, and join follow the worker lifecycle.
-This is asynchronous communication between threads in one process. A Unix socket
-transport is needed for an external routing process. There is no update-rate
+This queue connects threads in one process; the Unix stream adapter below allows
+an external routing process to exchange batches. There is no update-rate
 performance claim yet.
 
 ## Batching and packet buffers
@@ -302,3 +302,21 @@ Acquire/recycle do not grow their storage after construction; acquiring a size
 larger than capacity or exhausting the pool returns an empty optional. The pool
 is single-owner; workers never access it directly. Newly exposed vector bytes are
 zero-initialized. Packet count is bounded, and maximum frame capacity is explicit.
+
+## Process IPC
+
+`ipc::send_batch` and `receive_batch` exchange a version-one binary protocol over
+a caller-owned Unix stream socket. `send_ack` and `receive_ack` return control-plane
+status. A transport thread receives a batch, submits it to `ControlPlane`, waits
+for its acknowledgment, and sends the acknowledgment back. Calls handle short
+reads/writes and interruptions. The application owns connection establishment,
+timeouts, peer authorization, and reconnect policy; close a connection after any
+framing or I/O error. Transport calls block and never belong on forwarding threads.
+
+Messages have a four-byte length followed by network-byte-order fields. Payloads
+are limited to 1 MiB, route changes to 32,768, groups to 1,024, and members per
+group to 256. Decoders reject unsupported protocol versions, invalid enums,
+nonzero reserved fields, truncated messages, and trailing data before publication.
+Counts are bounded before iterating. No native C++ struct is sent over the wire.
+The IPC test forks a routing process and exchanges a batch and applied ack over
+a Unix socketpair, alongside codec and truncation tests.
