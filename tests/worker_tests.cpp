@@ -1,4 +1,5 @@
 #include "forwarding/worker.hpp"
+#include "forwarding/packet_pool.hpp"
 
 #include <cstdlib>
 #include <iostream>
@@ -183,10 +184,44 @@ void multicore() {
         check(submitted[i] == per_worker && received[i] == per_worker, "worker lost jobs");
     }
 }
+
+void pooled_batches() {
+    Fib fib;
+    NextHopTable table;
+    configure(fib, table);
+    ForwardingWorker<8> worker(fib, table);
+    PacketPool pool(8, 128);
+    check(worker.poll_batch(0) == WorkerProgress::idle, "zero batch budget");
+    const std::uint8_t* first_address = nullptr;
+    for (std::uint64_t i = 0; i < 8; ++i) {
+        auto buffer = pool.acquire(66);
+        check(buffer.has_value(), "acquire pooled buffer");
+        auto fixture = job(7 + 10 * i); // Valid IPv6 packets.
+        std::copy(fixture.frame.begin(), fixture.frame.end(), buffer->begin());
+        if (i == 0) first_address = buffer->data();
+        check(worker.try_submit(PacketJob{fixture.id, std::move(*buffer)}), "pooled submit");
+    }
+    check(!pool.acquire(66) && !pool.acquire(129), "pool exhaustion/oversize");
+    check(worker.poll_batch(8) == WorkerProgress::progressed, "process bounded batch");
+    for (std::uint64_t i = 0; i < 8; ++i) {
+        auto result = worker.try_receive();
+        check(result && result->id == 7 + 10 * i, "batch completion order");
+        if (i == 0) check(result->frame.data() == first_address, "pool buffer copied");
+        verify(*result, fib, table);
+        check(pool.recycle(std::move(result->frame)), "recycle completion");
+    }
+    check(pool.available() == 8, "pool restoration");
+    std::vector<std::uint8_t> foreign(128);
+    check(!pool.recycle(std::move(foreign)) && foreign.size() == 128, "full pool ownership");
+    worker.close();
+    worker.run();
+    check(worker.finished(), "batch shutdown");
+}
 } // namespace
 
 int main() {
     backpressure();
     multicore();
+    pooled_batches();
     std::cout << "All forwarding worker tests passed\n";
 }

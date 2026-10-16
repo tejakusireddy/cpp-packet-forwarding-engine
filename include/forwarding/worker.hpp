@@ -59,6 +59,36 @@ public:
     // Called only by the processing thread. Holds at most one pending completion
     // when output is full, without dropping packets or forwarding them twice.
     [[nodiscard]] WorkerProgress poll() noexcept {
+        return poll_batch(1);
+    }
+
+    // One snapshot acquisition per bounded batch. All newly processed packets
+    // in a batch use that version; already pending results retain their version.
+    [[nodiscard]] WorkerProgress poll_batch(std::size_t budget = 32) noexcept {
+        if (budget == 0) return WorkerProgress::idle;
+        const auto snapshot = snapshots_ ? snapshots_->acquire() : nullptr;
+        bool progressed = false;
+        for (std::size_t i = 0; i < budget; ++i) {
+            const auto result = poll_one(snapshot);
+            if (result != WorkerProgress::progressed) {
+                return progressed ? WorkerProgress::progressed : result;
+            }
+            progressed = true;
+        }
+        return WorkerProgress::progressed;
+    }
+
+    // Graceful drain. Keep receiving until all completions have been delivered.
+    void run() noexcept {
+        for (;;) {
+            const auto progress = poll_batch();
+            if (progress == WorkerProgress::stopped) return;
+            if (progress != WorkerProgress::progressed) std::this_thread::yield();
+        }
+    }
+
+private:
+    WorkerProgress poll_one(const std::shared_ptr<const RoutingSnapshot>& snapshot) noexcept {
         if (finished()) {
             return WorkerProgress::stopped;
         }
@@ -76,7 +106,6 @@ public:
             }
             // Acquire once so route lookup and adjacency resolution always use
             // the same version. Results contain values, not snapshot references.
-            const auto snapshot = snapshots_ ? snapshots_->acquire() : nullptr;
             const auto& fib = snapshot ? snapshot->fib() : *fib_;
             const auto& next_hops = snapshot ? snapshot->next_hops() : *next_hops_;
             auto result = forward_packet(packet->frame, fib, next_hops);
@@ -90,21 +119,6 @@ public:
         return WorkerProgress::progressed;
     }
 
-    // Graceful drain. A consumer must keep receiving while this runs, including
-    // after close, or a full completion queue will apply backpressure indefinitely.
-    void run() noexcept {
-        for (;;) {
-            const auto progress = poll();
-            if (progress == WorkerProgress::stopped) {
-                return;
-            }
-            if (progress != WorkerProgress::progressed) {
-                std::this_thread::yield();
-            }
-        }
-    }
-
-private:
     const Fib* fib_ = nullptr;
     const NextHopTable* next_hops_ = nullptr;
     const SnapshotStore* snapshots_ = nullptr;

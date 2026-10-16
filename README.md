@@ -244,7 +244,7 @@ a new store to start another version sequence.
 
 Readers acquire shared ownership of one immutable snapshot. Old snapshots remain
 valid until the final reader releases them. Workers constructed with a store
-acquire once per processed packet and report that version in `PacketCompletion`.
+acquire once per bounded polling batch and report that version in `PacketCompletion`.
 Queued packets use the snapshot current at processing time. Pending completions
 retain their original result and version across subsequent publications. Static
 table workers report version zero. Keep the store alive until its workers stop.
@@ -257,7 +257,7 @@ workers never take that writer mutex. The store retains replaced snapshots until
 thread. Publication also collects unused retired snapshots. Call collection after
 readers finish when updates cease; otherwise those retired versions remain until
 store destruction. Readers holding old versions can increase retained memory.
-Per-packet shared reference counting still requires performance work before
+Per-batch shared reference counting still requires performance work before
 claiming isolation at the target throughput or latency.
 
 Incremental snapshots share unchanged FIB nodes and copy a trie path only when
@@ -286,3 +286,19 @@ the batch again. Close, receive, drain, and join follow the worker lifecycle.
 This is asynchronous communication between threads in one process. A Unix socket
 transport is needed for an external routing process. There is no update-rate
 performance claim yet.
+
+## Batching and packet buffers
+
+`ForwardingWorker::poll_batch(budget)` processes at most the supplied number of
+completions and acquires one snapshot for the batch. `poll()` retains its one-step
+behavior; `run()` uses a budget of 32. Backpressure stops the batch immediately.
+This amortizes snapshot ownership without unbounded processing or changing FIFO
+order. A routing update may become visible at the next batch boundary.
+
+`PacketPool` preallocates a fixed number of vectors with a configured frame
+capacity. A dispatcher acquires one, fills it, submits it, consumes the returned
+completion, and recycles its vector. Buffers move through queues without copying.
+Acquire/recycle do not grow their storage after construction; acquiring a size
+larger than capacity or exhausting the pool returns an empty optional. The pool
+is single-owner; workers never access it directly. Newly exposed vector bytes are
+zero-initialized. Packet count is bounded, and maximum frame capacity is explicit.
