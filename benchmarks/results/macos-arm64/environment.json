@@ -1,0 +1,18 @@
+{
+  "timestamp_utc": "2026-10-16T20:50:24.096285+00:00",
+  "revision": "df3064eba2b050c660f104dc2b65f3723959eda7",
+  "working_tree_changes": "",
+  "system": "Darwin",
+  "release": "24.6.0",
+  "machine": "arm64",
+  "logical_cpus": 11,
+  "allowed_cpus": null,
+  "cpu_model": null,
+  "compiler": "Apple clang version 17.0.0 (clang-1700.3.19.1)\nTarget: arm64-apple-darwin24.6.0\nThread model: posix\nInstalledDir: /Library/Developer/CommandLineTools/usr/bin",
+  "build_cache": {
+    "CMAKE_BUILD_TYPE:STRING": "Release",
+    "CMAKE_CXX_COMPILER:FILEPATH": "/usr/bin/c++",
+    "CMAKE_CXX_FLAGS_RELEASE:STRING": "-O3 -DNDEBUG"
+  },
+  "note": "CPU affinity and background load were not controlled; no NIC I/O."
+}

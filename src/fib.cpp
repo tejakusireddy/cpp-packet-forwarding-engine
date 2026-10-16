@@ -15,19 +15,25 @@ std::size_t bit_at(const IpAddress& address, std::size_t bit) noexcept {
 }
 } // namespace
 
+Fib::Node* Fib::writable(std::shared_ptr<Node>& node) {
+    if (!node) {
+        node = std::make_shared<Node>();
+    } else if (node.use_count() > 1) {
+        node = std::make_shared<Node>(*node);
+    }
+    return node.get();
+}
+
 bool Fib::insert(IpVersion family, const IpAddress& prefix, std::size_t prefix_length,
                  std::uint32_t next_hop_group) {
     const auto bits = address_bits(family);
     if (bits == 0 || prefix_length > bits) {
         return false;
     }
-    auto* node = &roots_[family == IpVersion::v4 ? 0 : 1];
+    auto* node = writable(roots_[family == IpVersion::v4 ? 0 : 1]);
     for (std::size_t bit = 0; bit < prefix_length; ++bit) {
         auto& child = node->children[bit_at(prefix, bit)];
-        if (!child) {
-            child = std::make_unique<Node>();
-        }
-        node = child.get();
+        node = writable(child);
     }
     if (!node->next_hop_group) {
         ++size_;
@@ -37,20 +43,28 @@ bool Fib::insert(IpVersion family, const IpAddress& prefix, std::size_t prefix_l
 }
 
 bool Fib::erase(IpVersion family, const IpAddress& prefix,
-                std::size_t prefix_length) noexcept {
+                std::size_t prefix_length) {
     const auto bits = address_bits(family);
     if (bits == 0 || prefix_length > bits) {
         return false;
     }
-    auto* node = &roots_[family == IpVersion::v4 ? 0 : 1];
-    std::array<std::unique_ptr<Node>*, 128> path{};
+    // Check existence before allocating copies for a deletion that cannot match.
+    const auto* existing = roots_[family == IpVersion::v4 ? 0 : 1].get();
+    for (std::size_t bit = 0; existing && bit < prefix_length; ++bit) {
+        existing = existing->children[bit_at(prefix, bit)].get();
+    }
+    if (!existing || !existing->next_hop_group) {
+        return false;
+    }
+    auto* node = writable(roots_[family == IpVersion::v4 ? 0 : 1]);
+    std::array<std::shared_ptr<Node>*, 128> path{};
     for (std::size_t bit = 0; bit < prefix_length; ++bit) {
         auto& child = node->children[bit_at(prefix, bit)];
         if (!child) {
             return false;
         }
         path[bit] = &child;
-        node = child.get();
+        node = writable(child);
     }
     if (!node->next_hop_group) {
         return false;
@@ -73,9 +87,9 @@ std::optional<FibMatch> Fib::lookup(IpVersion family, const IpAddress& address) 
     if (bits == 0) {
         return std::nullopt;
     }
-    const auto* node = &roots_[family == IpVersion::v4 ? 0 : 1];
+    const auto* node = roots_[family == IpVersion::v4 ? 0 : 1].get();
     std::optional<FibMatch> best;
-    for (std::size_t depth = 0;; ++depth) {
+    for (std::size_t depth = 0; node; ++depth) {
         if (node->next_hop_group) {
             best = FibMatch{*node->next_hop_group, depth};
         }

@@ -1,4 +1,5 @@
 #include "forwarding/forward.hpp"
+#include "forwarding/flow.hpp"
 
 #include <algorithm>
 
@@ -24,10 +25,9 @@ bool extension_header(std::uint8_t protocol) noexcept {
         return false;
     }
 }
-} // namespace
-
-ForwardResult forward_packet(std::span<std::uint8_t> frame, const Fib& fib,
-                             const NextHopTable& next_hops, std::uint64_t flow_hash) noexcept {
+ForwardResult forward_impl(std::span<std::uint8_t> frame, const Fib& fib,
+                           const NextHopTable& next_hops,
+                           std::optional<std::uint64_t> supplied_hash) noexcept {
     const auto parsed = parse_packet(frame);
     if (const auto* error = std::get_if<ParseError>(&parsed)) {
         return *error;
@@ -44,7 +44,8 @@ ForwardResult forward_packet(std::span<std::uint8_t> frame, const Fib& fib,
     if (packet.hop_limit <= 1) {
         return ForwardError::hop_limit_expired;
     }
-    const auto resolution = next_hops.resolve(fib, packet.version, packet.destination, flow_hash);
+    const auto hash = supplied_hash ? *supplied_hash : flow_hash(packet);
+    const auto resolution = next_hops.resolve(fib, packet.version, packet.destination, hash);
     if (const auto* error = std::get_if<ResolutionError>(&resolution)) {
         return *error;
     }
@@ -65,6 +66,17 @@ ForwardResult forward_packet(std::span<std::uint8_t> frame, const Fib& fib,
     std::copy(resolved.next_hop.source_mac.begin(), resolved.next_hop.source_mac.end(),
               frame.begin() + 6);
     return ForwardedPacket{resolved, 14 + packet.datagram.size()};
+}
+} // namespace
+
+ForwardResult forward_packet(std::span<std::uint8_t> frame, const Fib& fib,
+                             const NextHopTable& next_hops, std::uint64_t hash) noexcept {
+    return forward_impl(frame, fib, next_hops, hash);
+}
+
+ForwardResult forward_packet(std::span<std::uint8_t> frame, const Fib& fib,
+                             const NextHopTable& next_hops) noexcept {
+    return forward_impl(frame, fib, next_hops, std::nullopt);
 }
 
 } // namespace forwarding

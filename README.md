@@ -1,125 +1,145 @@
-# cpp-packet-forwarding-engine
-High-performance userspace packet forwarding engine in C++20 with IPv4/IPv6, FIB longest-prefix lookup, ECMP, multicore processing, and asynchronous control/data-plane IPC.
+# Userspace Packet Forwarding Engine
 
-The project is under development. The current implementation provides a
-bounds-checked, allocation-free Ethernet II and IPv4/IPv6 parser and a mutable
-IPv4/IPv6 longest-prefix FIB, resolved next-hop groups, and equal-cost multipath
-selection, plus in-place frame preparation for forwarding. Packet transmission,
-multicore workers, and control-plane IPC are
-planned. No throughput or latency claims have been measured yet.
+A C++20 forwarding engine with Ethernet/IPv4/IPv6 parsing, longest-prefix lookup,
+resolved next-hop groups, ECMP, multicore workers, and versioned control-plane
+updates. Linux packet sockets provide a reference receive/transmit runtime.
 
-## Build and test
+The portable implementation is tested on macOS with release builds, address and
+undefined-behavior sanitizers, and ThreadSanitizer. Linux build, loopback, and veth
+tests are configured in CI; they have not been executed locally in this workspace.
+The full performance targets are **not yet validated**.
 
-Requires CMake 3.20+ and a C++20 compiler. Linux is the deployment target; the
-portable parser can also be built on macOS.
+## Build and run tests
+
+Requires CMake 3.20+, a C++20 Clang/GCC compiler, and POSIX threads/sockets. Linux
+is the deployment target; library tests and in-memory benchmarks also run on macOS.
+No third-party C++ dependencies are required.
 
 ```sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build --parallel
 ctest --test-dir build --output-on-failure
-```
 
-To check memory safety and undefined behavior with Clang or GCC:
-
-```sh
 cmake -S . -B build-sanitize -DCMAKE_BUILD_TYPE=Debug -DENABLE_SANITIZERS=ON
 cmake --build build-sanitize --parallel
 ctest --test-dir build-sanitize --output-on-failure
+
+cmake -S . -B build-thread -DCMAKE_BUILD_TYPE=Debug -DENABLE_THREAD_SANITIZER=ON
+cmake --build build-thread --parallel
+ctest --test-dir build-thread --output-on-failure
 ```
 
-## Parser contract
+Address/undefined-behavior and thread sanitizers require separate build directories.
+`BUILD_TESTING=OFF` omits tests; `BUILD_BENCHMARKS=OFF` omits the benchmark executable.
 
-`forwarding::parse_packet` accepts a borrowed byte span and returns a packet view
-or a specific parse error. It reads network byte order without aligned pointer
-casts. The view includes IP addresses, hop limit/TTL, protocol/next-header value,
-and the complete IP datagram with Ethernet padding excluded. Keep the input
-buffer alive for the lifetime of the view.
+## Architecture
 
-The parser checks IP versions, IPv4 header and total lengths, IPv6 payload length,
-and buffer bounds. IPv4 options are accepted; IPv6 extension headers are retained
-inside the datagram without traversal. VLAN tags and IPv6 jumbograms are not
-supported. Checksums and transport headers are not validated. Parsing success
-does not imply a packet is eligible for forwarding.
+```mermaid
+flowchart LR
+    R[Routing process] -->|Unix stream batches| T[Transport adapter]
+    T -->|SPSC updates| C[Control thread]
+    C -->|validated incremental version| S[Snapshot store]
+    I[Linux ingress] --> D[Dispatcher and buffer pool]
+    D -->|per-worker SPSC input| W[Forwarding workers]
+    S -->|one immutable version per batch| W
+    W -->|owned completions| D
+    D --> O[Linux egress]
+```
 
-Tests cover both address families, truncation at every byte boundary, malformed
-lengths and versions, padding, unaligned input, IPv4 options, empty IPv6 payloads,
-and 20,000 deterministic randomized inputs. Linux CI runs GCC and Clang with and
-without address/undefined behavior sanitizers.
+The IPC adapter is a library capability; the reference executable installs static
+startup routes and does not expose a routing-process listener. Tests exercise IPC
+across a real process boundary and concurrent snapshot updates separately.
 
-## Forwarding information base
+A packet follows this path:
 
-`forwarding::Fib` stores IPv4 and IPv6 prefixes in separate binary tries. Insert
-adds or replaces an exact prefix; erase removes an exact prefix and prunes unused
-nodes. Host bits are ignored. Prefix lengths span 0–32 for IPv4 and 0–128 for
-IPv6, including independent default routes. IPv4 addresses use the first four
-bytes of the same 16-byte address representation returned by the parser.
+1. Parse Ethernet and IP lengths without allocating or assuming aligned input.
+2. Validate forwarding eligibility and IPv4 checksum before modifying any byte.
+3. Hash the flow, find the longest matching prefix, and select an available ECMP member.
+4. Decrement TTL/hop limit, update the IPv4 checksum, and rewrite Ethernet addresses.
+5. Return the owned buffer and selected interface; the dispatcher transmits and recycles it.
 
-Lookup returns the longest matching prefix length and a next-hop group ID, or
-an empty optional if no route matches. Group IDs refer to entries in the next-hop
-table described below. Lookup performs no
-allocations and traverses at most 32 or 128 address bits. Updates allocate nodes
-as needed; this initial representation has not been validated at million-route
-scale or against the throughput target.
+Every rejected frame remains unchanged. Queue pressure preserves ownership; output
+pressure holds a completion without forwarding it twice. Shutdown stops new input,
+drains accepted work, and joins caller-owned threads.
 
-The table supports concurrent readers only when there are no concurrent writes.
-Snapshot publication and worker isolation will be implemented with control-plane
-updates. Tests exercise every prefix length, replacement, deletion, family
-isolation, and 8,000 deterministic randomized updates with 16,000 lookups checked
-against an independent linear reference table.
+Routing updates build a separate candidate snapshot. Unchanged trie nodes are
+shared; only touched shared paths are copied. A batch names its expected base
+version, so stale work cannot overwrite intervening changes. Publication swaps
+FIB and adjacency tables together. Retired versions are collected on a control
+thread after readers release them.
 
-## Next-hop resolution and ECMP
+## Read the code and understand why
 
-`forwarding::NextHopTable` maps group IDs to resolved Ethernet adjacencies:
-member ID, output interface ID, source MAC, destination MAC, and availability.
-The control plane must supply these values; ARP/neighbor discovery and interface
-validation are not implemented. IDs are opaque and may be zero.
+Start with the [code guide](docs/code-guide.md). It follows every source component,
+explains its functions and important branches, and links the relevant tests.
+The [design decisions](docs/design.md) explain alternatives and tradeoffs.
+The [IPC protocol](docs/ipc-protocol.md) specifies every wire field.
 
-Group updates copy their input and replace the group in full. Empty groups and
-duplicate member IDs are rejected without modifying the table. Unavailable
-members are excluded during updates, leaving no per-packet member scan.
-Groups with all members unavailable remain present and return an explicit error.
+| Component | Source | Main reason for the design |
+| --- | --- | --- |
+| Parser | `src/packet.cpp` | Borrow bytes; validate bounds before reads |
+| FIB | `src/fib.cpp` | Bounded lookup; share unchanged snapshot paths |
+| Adjacencies/ECMP | `src/next_hop.cpp` | Resolve off-path; select active members in constant time |
+| Flow hash | `src/flow.cpp` | Stable mapping; keep IPv4 fragments together |
+| Frame preparation | `src/forward.cpp` | Validate before mutation |
+| SPSC queue | `include/forwarding/spsc_queue.hpp` | Bounded ownership transfer with explicit backpressure |
+| Workers/pool | `include/forwarding/worker.hpp`, `packet_pool.hpp` | Reuse buffers and amortize snapshot acquisition |
+| Snapshots | `src/snapshot.cpp` | Publish consistent tables; reclaim outside forwarding |
+| Control batches | `include/forwarding/control.hpp` | All-or-nothing updates and ordered acknowledgments |
+| Process transport | `src/ipc.cpp` | Bounded, versioned, portable wire representation |
+| Linux runtime | `src/linux_io.cpp`, `src/main.cpp` | Auditable packet I/O and flow dispatch |
+| Measurement | `benchmarks/forwarding_bench.cpp` | Separate core, queue, route-scale, and update costs |
 
-Resolution performs a longest-prefix lookup and selects an available member by
-mixing a caller-supplied 64-bit flow hash and taking its remainder over the active
-member count. The caller must use a stable hash for packets in the same flow;
-packet-to-flow hashing is not implemented yet. Selection is deterministic for a
-fixed hash and ordered active membership. Membership, ordering, or availability
-changes may remap flows. Weighted and resilient ECMP are not implemented.
+Public headers specify ownership, thread roles, errors, and lifetime requirements.
+Comments explain non-obvious invariants; the guide supplies the surrounding
+reasoning rather than repeating each C++ statement in a comment.
 
-Results copy the matched prefix and selected adjacency without allocating.
-Missing routes, missing groups, and groups without available members have distinct
-errors. Resolution does not fall back to a less-specific route after finding a
-route with an unusable group. Concurrent resolution requires both tables to remain
-unchanged. This step does not decrement TTL/hop limit, rewrite frames, or transmit.
+## Linux forwarding
 
-Tests cover parser-to-adjacency resolution for both address families, group
-replacement and removal, failure paths, flow affinity, deterministic selection,
-and distribution over 100,000 synthetic flow hashes.
+Use dedicated test interfaces or the isolated integration environment. The runtime
+does not configure host routing or interfaces. It requires `CAP_NET_RAW`:
 
-## Frame forwarding
+```sh
+sudo ./build/packet_forwarder IN_INTERFACE OUT_INTERFACE aa:bb:cc:dd:ee:ff 8
+# Optional input count and first worker CPU; zero count runs until a signal.
+sudo ./build/packet_forwarder IN_INTERFACE OUT_INTERFACE aa:bb:cc:dd:ee:ff 8 1000000 2
 
-`forwarding::forward_packet` parses a mutable Ethernet frame, validates the IPv4
-header checksum, checks TTL/hop limit, and resolves its output adjacency. On
-success it decrements TTL/hop limit, recomputes the IPv4 header checksum, and
-rewrites destination and source Ethernet addresses. The result includes the
-selected adjacency and frame length through the end of the IP datagram.
-Payload, Ethernet type, and trailing padding remain unchanged. Any failure
-returns a parse, resolution, or forwarding error without changing the frame.
+sudo ./build/linux_io_tests
+sudo bash tests/linux_integration.sh
+```
 
-This initial path handles IPv4 headers without options and IPv6 packets without
-extension headers. IPv4 options and recognized IPv6 extension headers return an
-explicit unsupported-options error for a future separate processing path.
-IPv4 fragments can be prepared; callers must supply a consistent ECMP hash for
-all fragments in a flow. No transport checksum update is needed for changes to
-Ethernet addresses or TTL/hop limit.
+The destination MAC is explicit; source MAC and MTU come from the output interface.
+Both IP families receive default routes to that adjacency. CPU pinning is opt-in
+and requested unavailable CPUs cause startup failure. SIGINT/SIGTERM stops input
+and drains accepted jobs. The veth test creates a temporary namespace, checks IPv4
+and IPv6 forwarding, and removes the namespace on exit.
 
-The function allocates no memory and performs no transmission. The caller owns
-the frame and supplies its flow hash. A future transmit backend must ensure
-minimum Ethernet padding and enforce output MTU. ICMP error generation, local
-delivery, address-policy checks, and ARP/neighbor discovery are not implemented.
-Tables must remain unchanged during the call.
+## Performance evidence
 
-Tests verify both address families for every forwarding TTL/hop limit (2–255),
-IPv4 checksum correctness, exact mutation boundaries, preserved payload/padding,
-all truncation boundaries, expired hops, corrupt checksums, unsupported headers,
-and resolution failures. Rejected frames are checked for byte-for-byte equality.
+```sh
+./build/forwarding_bench --mode queued --workers 8 --packets 1000000 \
+  --routes 1000000 --updates 100000 --batch 512
+python3 scripts/benchmark.py --output benchmarks/results/local
+```
+
+Read the [benchmark protocol](docs/benchmarking.md) before interpreting results.
+`core` excludes queues and uses a small active lookup set. `queued` includes
+dispatcher/worker scheduling and walks the configured route table. Neither includes
+NIC I/O. Updates are measured in a separate phase, excluding IPC serialization.
+The [validation report](docs/validation.md) records measured results and remaining gates.
+
+## Current boundaries
+
+- Untagged Ethernet II, IPv4 without options on the forwarding path, and IPv6
+  without recognized extension headers. The structural parser also accepts IPv4 options.
+- No VLAN, jumbograms, ICMP generation, local delivery, address-policy checks,
+  ARP/ND, weighted/resilient ECMP, or transport checksum validation.
+- SPSC queues are lock-free on supported targets. Snapshot shared-pointer operations
+  are not guaranteed lock-free. Slow readers can retain old routing memory.
+- Process IPC has bounded framing and typed acknowledgments; embedding applications
+  supply listener permissions, peer checks, timeouts, and reconnect policy.
+- AF_PACKET is a syscall-based reference backend. Packet rings, NIC steering,
+  batched socket I/O, and wire-level performance validation remain future work.
+- Million-route scale and update throughput have local benchmark evidence. The
+  queued sub-10µs p99 target, Linux eight-core results, and simultaneous forwarding
+  under update load remain open acceptance gates.

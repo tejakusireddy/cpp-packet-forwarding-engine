@@ -39,6 +39,7 @@ public:
     [[nodiscard]] bool upsert(std::uint32_t group_id, std::span<const NextHop> members);
     [[nodiscard]] bool erase(std::uint32_t group_id);
     [[nodiscard]] std::size_t size() const noexcept { return groups_.size(); }
+    [[nodiscard]] bool contains(std::uint32_t group_id) const { return groups_.contains(group_id); }
 
     // The caller supplies a stable flow hash. Mixes it and selects an equal-cost
     // available member. Results are copied and remain valid after table updates.

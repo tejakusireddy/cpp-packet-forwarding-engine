@@ -19,12 +19,13 @@ struct FibMatch {
 };
 
 // Mutable binary prefix trie. Concurrent readers are supported only while no
-// thread mutates the table. Publication of immutable snapshots belongs to IPC.
+// thread mutates the table. RoutingSnapshot owns tables for atomic publication.
 class Fib {
 public:
     Fib() = default;
-    Fib(const Fib&) = delete;
-    Fib& operator=(const Fib&) = delete;
+    // Copies share nodes. Mutations detach shared paths before changing them.
+    Fib(const Fib&) = default;
+    Fib& operator=(const Fib&) = default;
     Fib(Fib&&) = delete;
     Fib& operator=(Fib&&) = delete;
 
@@ -34,17 +35,18 @@ public:
                               std::size_t prefix_length, std::uint32_t next_hop_group);
     // Removes the exact prefix, leaving more-specific routes intact.
     [[nodiscard]] bool erase(IpVersion family, const IpAddress& prefix,
-                             std::size_t prefix_length) noexcept;
+                             std::size_t prefix_length);
     [[nodiscard]] std::optional<FibMatch> lookup(IpVersion family,
                                                 const IpAddress& address) const noexcept;
     [[nodiscard]] std::size_t size() const noexcept { return size_; }
 
 private:
     struct Node {
-        std::array<std::unique_ptr<Node>, 2> children;
+        std::array<std::shared_ptr<Node>, 2> children;
         std::optional<std::uint32_t> next_hop_group;
     };
-    std::array<Node, 2> roots_;
+    static Node* writable(std::shared_ptr<Node>& node);
+    std::array<std::shared_ptr<Node>, 2> roots_;
     std::size_t size_ = 0;
 };
 

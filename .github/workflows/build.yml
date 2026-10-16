@@ -19,3 +19,27 @@ jobs:
         run: cmake --build build --parallel
       - name: Test
         run: ctest --test-dir build --output-on-failure
+
+  thread-sanitizer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: >-
+          cmake -S . -B build-thread -DCMAKE_BUILD_TYPE=Debug
+          -DCMAKE_CXX_COMPILER=clang++ -DENABLE_THREAD_SANITIZER=ON
+      - name: Build
+        run: cmake --build build-thread --parallel
+      - name: Test
+        run: ctest --test-dir build-thread --output-on-failure
+
+  linux-packet-io:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+      - run: cmake --build build --parallel
+      - name: Privileged loopback integration
+        run: sudo ./build/linux_io_tests
+      - name: Isolated veth forwarding integration
+        run: sudo bash tests/linux_integration.sh

@@ -133,10 +133,27 @@ void differential() {
         }
     }
 }
+
+void copy_isolation() {
+    Fib original;
+    const IpAddress address{192, 0, 2, 1};
+    check(original.insert(IpVersion::v4, {}, 0, 1), "copy default");
+    check(original.insert(IpVersion::v4, address, 32, 2), "copy host");
+    Fib copy(original);
+    check(copy.erase(IpVersion::v4, address, 32), "copy erase");
+    check(original.lookup(IpVersion::v4, address) == FibMatch{2, 32}, "copy changed original");
+    check(copy.lookup(IpVersion::v4, address) == FibMatch{1, 0}, "copy fallback");
+    check(original.insert(IpVersion::v4, {}, 0, 3), "mutate original");
+    check(copy.lookup(IpVersion::v4, {}) == FibMatch{1, 0}, "original changed copy");
+    copy = original;
+    check(original.erase(IpVersion::v4, {}, 0), "erase shared root");
+    check(copy.lookup(IpVersion::v4, {}) == FibMatch{3, 0}, "root alias after assignment");
+}
 } // namespace
 
 int main() {
     boundaries();
     differential();
+    copy_isolation();
     std::cout << "All FIB tests passed\n";
 }
