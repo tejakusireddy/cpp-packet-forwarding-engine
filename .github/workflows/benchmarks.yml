@@ -1,0 +1,36 @@
+name: Hosted Linux benchmarks
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [benchmark/linux-baseline]
+
+permissions:
+  contents: read
+
+jobs:
+  baseline:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build release benchmark
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
+          cmake --build build --parallel 2
+      - name: Record default queue window
+        run: python3 scripts/benchmark.py --output build/results/default --workers 1,2,4,8
+      - name: Record smaller queue window
+        run: >-
+          python3 scripts/benchmark.py --output build/results/window-32
+          --modes queued --workers 1,2,4,8 --window 32
+      - name: Summarize measurements
+        run: python3 scripts/summarize_benchmarks.py build/results >> "$GITHUB_STEP_SUMMARY"
+      - name: Save every run and environment record
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hosted-linux-benchmarks
+          path: build/results
+          if-no-files-found: error
+          retention-days: 30
