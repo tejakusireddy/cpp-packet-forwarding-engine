@@ -55,6 +55,18 @@ begun using the version. A worker reports its actual processing version in each
 completion. Current version may already be higher if another publisher advanced it.
 
 The library provides framing and blocking transport on a caller-owned Unix socket.
+`IoOptions` bounds each complete prefix-plus-payload transfer with one steady-clock
+deadline (five seconds by default). Cancellation is checked at most every 20ms
+while waiting for readiness. Reads/writes use nonblocking syscall flags, so a
+readiness race cannot introduce an unbounded block. Close after a deadline or
+cancellation because the stream may contain only part of a message.
+
+`UnixListener` supplies nonblocking accept with a backlog of four and owns its
+filesystem entry. Its parent must be a private directory owned by the effective
+UID; the socket is mode 0600. Startup never removes an existing path. Cleanup
+checks device/inode identity before unlinking its own socket. `UnixConnection`
+owns client/accepted descriptors, sets close-on-exec, and supports bounded connect.
+
 An embedding process supplies listeners, file permissions, peer checks, deadlines,
 and reconnect policy. Close after malformed framing, EOF, or partial transfer error.
 Neither malformed input nor a failed batch may alter the published snapshot.
