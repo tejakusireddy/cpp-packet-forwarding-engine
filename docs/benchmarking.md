@@ -39,6 +39,12 @@ time, including thread synchronization and joining in core mode. Queued mode end
 when the dispatcher has received all completions, then joins drained workers.
 There is no CPU pinning by default; record affinity and competing load separately.
 
+`--window N` limits submitted-but-unreceived packets per worker in queued mode.
+The default, 2,049, permits the full input/output/pending capacity. Smaller windows
+bound queue residence at the cost of concurrency. Compare throughput and p99
+together, and record the window with each result; a changed window is a changed
+workload. Idle workers acquire no routing snapshot until they actually pop a job.
+
 ## Route and update measurements
 
 Initial snapshot construction is timed separately. Update batches are prepared

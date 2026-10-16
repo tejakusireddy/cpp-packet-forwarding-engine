@@ -66,7 +66,7 @@ public:
     // in a batch use that version; already pending results retain their version.
     [[nodiscard]] WorkerProgress poll_batch(std::size_t budget = 32) noexcept {
         if (budget == 0) return WorkerProgress::idle;
-        const auto snapshot = snapshots_ ? snapshots_->acquire() : nullptr;
+        std::shared_ptr<const RoutingSnapshot> snapshot;
         bool progressed = false;
         for (std::size_t i = 0; i < budget; ++i) {
             const auto result = poll_one(snapshot);
@@ -88,7 +88,7 @@ public:
     }
 
 private:
-    WorkerProgress poll_one(const std::shared_ptr<const RoutingSnapshot>& snapshot) noexcept {
+    WorkerProgress poll_one(std::shared_ptr<const RoutingSnapshot>& snapshot) noexcept {
         if (finished()) {
             return WorkerProgress::stopped;
         }
@@ -106,6 +106,7 @@ private:
             }
             // Acquire once so route lookup and adjacency resolution always use
             // the same version. Results contain values, not snapshot references.
+            if (snapshots_ && !snapshot) snapshot = snapshots_->acquire();
             const auto& fib = snapshot ? snapshot->fib() : *fib_;
             const auto& next_hops = snapshot ? snapshot->next_hops() : *next_hops_;
             auto result = forward_packet(packet->frame, fib, next_hops);

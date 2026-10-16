@@ -7,7 +7,7 @@ updates. Linux packet sockets provide a reference receive/transmit runtime.
 The portable implementation is tested on macOS with release builds, address and
 undefined-behavior sanitizers, and ThreadSanitizer. Linux build, loopback, and veth
 tests are configured in CI; they have not been executed locally in this workspace.
-The full resume performance targets are **not yet validated**.
+The full performance targets are **not yet validated**.
 
 ## Build and run tests
 

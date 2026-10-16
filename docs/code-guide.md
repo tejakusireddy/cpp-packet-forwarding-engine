@@ -190,7 +190,9 @@ static table pointers or a snapshot store pointer; constructors establish which.
 belongs to the output consumer. `finished` means publication is done, not that
 the consumer has drained every completion.
 
-`poll_batch` acquires one snapshot and calls `poll_one` up to its budget. `poll`
+`poll_batch` calls `poll_one` up to its budget. The first newly popped packet
+acquires the batch snapshot; idle and pending-only polls avoid shared-pointer
+loads entirely. `poll`
 uses budget one. `poll_one` retries a pending completion before reading another
 job. Otherwise it loads close with acquire *before* checking the input ring: if
 close is observed, preceding producer submissions must be visible before declaring

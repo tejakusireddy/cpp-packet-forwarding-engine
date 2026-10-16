@@ -57,7 +57,7 @@ if(BUILD_TESTING)
   if(BUILD_BENCHMARKS)
     foreach(mode IN ITEMS core queued)
       add_test(NAME benchmark_${mode}_smoke COMMAND forwarding_bench --mode ${mode}
-               --workers 2 --packets 2048 --routes 128 --updates 256 --batch 32)
+               --workers 2 --packets 2048 --routes 128 --updates 256 --batch 32 --window 2)
       set_tests_properties(benchmark_${mode}_smoke PROPERTIES TIMEOUT 60)
     endforeach()
   endif()

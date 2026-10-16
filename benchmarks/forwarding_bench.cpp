@@ -16,7 +16,8 @@ using namespace forwarding;
 using Clock = std::chrono::steady_clock;
 namespace {
 struct Options {
-    std::size_t workers = 1, packets = 100000, routes = 10000, updates = 10000, batch = 256;
+    std::size_t workers = 1, packets = 100000, routes = 10000, updates = 10000, batch = 256,
+                window = 2049;
     std::string mode = "queued";
 };
 std::size_t number(const char* text) {
@@ -38,11 +39,12 @@ Options options(int argc, char** argv) {
         else if (flag == "--routes") result.routes = number(argv[i + 1]);
         else if (flag == "--updates") result.updates = number(argv[i + 1]);
         else if (flag == "--batch") result.batch = number(argv[i + 1]);
+        else if (flag == "--window") result.window = number(argv[i + 1]);
         else throw std::invalid_argument("Unknown benchmark option");
     }
     if ((result.mode != "core" && result.mode != "queued") || result.workers > 64 ||
         result.packets > 10000000 || result.routes > 8000000 || result.updates > 10000000 ||
-        result.batch > 32768) throw std::invalid_argument("Benchmark option out of range");
+        result.batch > 32768 || result.window > 2049) throw std::invalid_argument("Benchmark option out of range");
     return result;
 }
 IpAddress address(std::size_t index) {
@@ -140,7 +142,7 @@ Measurement queued(const Options& config, const SnapshotStore& store) {
     std::size_t completed = 0;
     while (completed < config.workers * config.packets) {
         for (std::size_t worker = 0; worker < config.workers; ++worker) {
-            if (sent[worker] < config.packets) {
+            if (sent[worker] < config.packets && sent[worker] - received[worker] < config.window) {
                 auto buffer = pool.acquire(64);
                 if (buffer) {
                     fill(*buffer, (worker * config.packets + sent[worker]) % config.routes);
@@ -235,6 +237,7 @@ int main(int argc, char** argv) {
                   << ",\n  \"build_seconds\": " << build_seconds << ",\n  \"forward_seconds\": " << measured.seconds
                   << ",\n  \"packets_per_second\": " << static_cast<double>(config.workers * config.packets) / measured.seconds
                   << ",\n  \"latency_samples\": " << measured.latency.size() << ",\n  \"sample_stride\": 1024,\n  \"p99_ns\": " << p99
+                  << ",\n  \"inflight_window\": " << config.window
                   << ",\n  \"errors\": " << measured.errors << ",\n  \"updates\": " << config.updates << ",\n  \"update_batch\": " << config.batch
                   << ",\n  \"update_seconds\": " << update_seconds << ",\n  \"updates_per_second\": " << static_cast<double>(config.updates) / update_seconds
                   << ",\n  \"peak_rss_kib\": " << rss_kib << "\n}\n";

@@ -60,9 +60,9 @@ the project target. Raw repetitions remain committed so variance is visible.
 
 ## Next performance experiments
 
-Bound per-worker in-flight packets and compare the throughput/latency tradeoff.
-Avoid snapshot acquisition during empty polls. Measure active-set size, random
+The benchmark now supports a per-worker in-flight window, and workers avoid
+snapshot acquisition during empty polls. Measure active-set size, random
 prefix distributions, IPv6 route scale, idle scheduling, affinity, and IPC costs
 separately. Repeat on a documented Linux machine and include the full packet path
-before turning any number into a resume claim. The current queued tail-latency gap
+before publishing a full-path performance claim. The current queued tail-latency gap
 must remain visible even when core microbenchmarks are much faster.

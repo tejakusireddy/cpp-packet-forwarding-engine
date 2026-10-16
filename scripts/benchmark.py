@@ -25,6 +25,7 @@ def main():
     parser.add_argument("--routes", default=1000000, type=int)
     parser.add_argument("--updates", default=100000, type=int)
     parser.add_argument("--batch", default=512, type=int)
+    parser.add_argument("--window", default=2049, type=int)
     args = parser.parse_args()
     workers = [int(value) for value in args.workers.split(",")]
     if not workers or min(workers) < 1 or max(workers) > 64 or args.repetitions < 1:
@@ -61,7 +62,8 @@ def main():
             for repetition in range(1, args.repetitions + 1):
                 command = [args.binary, "--mode", mode, "--workers", str(count),
                            "--packets", str(args.packets), "--routes", str(args.routes),
-                           "--updates", str(args.updates), "--batch", str(args.batch)]
+                           "--updates", str(args.updates), "--batch", str(args.batch),
+                           "--window", str(args.window)]
                 result = json.loads(run(command, root))
                 if result["errors"] != 0:
                     raise RuntimeError("Benchmark reported forwarding errors")
