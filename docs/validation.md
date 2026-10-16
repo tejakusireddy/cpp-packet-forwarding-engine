@@ -63,6 +63,42 @@ queued mode walks the table. The throughput difference is not just queue cost.
 Read [measurement boundaries](benchmarking.md) before comparing either mode with
 the project target. Raw repetitions remain committed so variance is visible.
 
+## Hosted Linux baseline
+
+[Run 38971551487](https://github.com/tejakusireddy/cpp-packet-forwarding-engine/actions/runs/38971551487)
+measured the merged forwarding baseline at revision
+`ef761f15a1d0b5238796cc2c87c210b46b4f9d86`. The runner exposed four x86-64 vCPUs
+on a Microsoft-virtualized AMD EPYC 9V74 system, Linux `6.17.0-1022-azure`, GCC
+13.3, and Release `-O3 -DNDEBUG`. Its reported topology is virtual; the host CPU
+model does not grant access to all of that processor's physical cores. There was
+no CPU pinning or control over neighboring host load.
+
+All [36 raw repetitions and environment records](../benchmarks/results/hosted-linux/provenance.json)
+are saved. Each run built one million distinct IPv4 /32 routes, forwarded one
+million packets per worker, and separately applied 100,000 route operations in
+batches of 512. All runs reported zero forwarding errors. These median per-run
+results use the smaller queue window of 32:
+
+| Workers | Allocated vCPUs | Queued packets/s | Sampled p99 | Separate route updates/s |
+| ---: | ---: | ---: | ---: | ---: |
+| 1 | 4 | 4.26M | 9.925µs | 4.40M |
+| 2 | 4 | 9.17M | 10.906µs | 4.34M |
+| 4 | 4 | 9.34M | 33.139µs | 4.42M |
+| 8 | 4 | 11.03M | 119.697µs | 4.39M |
+
+The eight-worker row oversubscribes the VM. It is not an eight-core measurement.
+At the default 2,049-packet window, four workers measured 8.51M packets/s with
+3,000.639µs sampled p99, demonstrating why queue depth must accompany latency
+claims. The smaller window changes the offered workload and queue residence.
+The sub-10µs project target is not established by a single-worker median near
+10µs; it remains unverified for the required eight-core forwarding workload.
+
+Core mode with four workers measured 27.96M calls/s and 0.211µs sampled p99, but
+excludes queues and uses a small active lookup set. No hosted measurement includes
+NIC I/O, process IPC costs, or simultaneous updates/forwarding. Future target runs
+need a controlled Linux host with enough dedicated processing capacity for workers,
+dispatcher, and control activity, plus an explicit packet-path timing boundary.
+
 ## Target status
 
 | Target | Evidence | Status |
