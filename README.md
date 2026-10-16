@@ -4,7 +4,8 @@ High-performance userspace packet forwarding engine in C++20 with IPv4/IPv6, FIB
 The project is under development. The current implementation provides a
 bounds-checked, allocation-free Ethernet II and IPv4/IPv6 parser and a mutable
 IPv4/IPv6 longest-prefix FIB, resolved next-hop groups, and equal-cost multipath
-selection. Packet transmission, multicore workers, and control-plane IPC are
+selection, plus in-place frame preparation for forwarding. Packet transmission,
+multicore workers, and control-plane IPC are
 planned. No throughput or latency claims have been measured yet.
 
 ## Build and test
@@ -94,3 +95,31 @@ unchanged. This step does not decrement TTL/hop limit, rewrite frames, or transm
 Tests cover parser-to-adjacency resolution for both address families, group
 replacement and removal, failure paths, flow affinity, deterministic selection,
 and distribution over 100,000 synthetic flow hashes.
+
+## Frame forwarding
+
+`forwarding::forward_packet` parses a mutable Ethernet frame, validates the IPv4
+header checksum, checks TTL/hop limit, and resolves its output adjacency. On
+success it decrements TTL/hop limit, recomputes the IPv4 header checksum, and
+rewrites destination and source Ethernet addresses. The result includes the
+selected adjacency and frame length through the end of the IP datagram.
+Payload, Ethernet type, and trailing padding remain unchanged. Any failure
+returns a parse, resolution, or forwarding error without changing the frame.
+
+This initial path handles IPv4 headers without options and IPv6 packets without
+extension headers. IPv4 options and recognized IPv6 extension headers return an
+explicit unsupported-options error for a future separate processing path.
+IPv4 fragments can be prepared; callers must supply a consistent ECMP hash for
+all fragments in a flow. No transport checksum update is needed for changes to
+Ethernet addresses or TTL/hop limit.
+
+The function allocates no memory and performs no transmission. The caller owns
+the frame and supplies its flow hash. A future transmit backend must ensure
+minimum Ethernet padding and enforce output MTU. ICMP error generation, local
+delivery, address-policy checks, and ARP/neighbor discovery are not implemented.
+Tables must remain unchanged during the call.
+
+Tests verify both address families for every forwarding TTL/hop limit (2–255),
+IPv4 checksum correctness, exact mutation boundaries, preserved payload/padding,
+all truncation boundaries, expired hops, corrupt checksums, unsupported headers,
+and resolution failures. Rejected frames are checked for byte-for-byte equality.
