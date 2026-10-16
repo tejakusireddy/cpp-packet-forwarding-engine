@@ -9,6 +9,10 @@ versioned routing snapshots. Packet transmission and control-plane IPC are
 planned. No throughput or latency
 claims have been measured yet.
 
+On Linux, an AF_PACKET reference backend supplies nonblocking receive/transmit,
+MTU checks, minimum Ethernet padding, and optional worker affinity. It requires
+`CAP_NET_RAW`; the portable build excludes its Linux-specific source.
+
 ## Build and test
 
 Requires CMake 3.20+ and a C++20 compiler. Linux is the deployment target; the
@@ -320,3 +324,19 @@ nonzero reserved fields, truncated messages, and trailing data before publicatio
 Counts are bounded before iterating. No native C++ struct is sent over the wire.
 The IPC test forks a routing process and exchanges a batch and applied ack over
 a Unix socketpair, alongside codec and truncation tests.
+
+## Linux packet I/O
+
+`PacketSocket(interface)` binds a raw nonblocking socket to one Linux interface.
+`receive` writes into caller storage, skips outgoing copies, and reports truncated
+input instead of forwarding a partial frame. `transmit` enforces output MTU and
+zero-pads short Ethernet frames to 60 bytes, excluding device-generated FCS.
+Backpressure returns false; the application must retain and retry the frame.
+The socket is closed by RAII. This syscall-per-packet backend establishes a
+reference path; it is not a claim of kernel bypass or line-rate performance.
+
+`pin_current_thread(cpu)` optionally pins a Linux thread to an allowed CPU ID.
+Pinning to an unavailable CPU is an explicit error. No affinity is imposed on
+the user's machine by default. Linux CI runs the raw-socket loopback integration
+test with privileges, checking receive/transmit, padding, and output MTU rejection.
+Ordinary unprivileged CTest runs skip that test when `CAP_NET_RAW` is unavailable.
