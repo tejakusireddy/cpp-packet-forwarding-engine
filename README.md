@@ -81,8 +81,8 @@ Groups with all members unavailable remain present and return an explicit error.
 
 Resolution performs a longest-prefix lookup and selects an available member by
 mixing a caller-supplied 64-bit flow hash and taking its remainder over the active
-member count. The caller must use a stable hash for packets in the same flow;
-packet-to-flow hashing is not implemented yet. Selection is deterministic for a
+member count. The caller must use a stable hash for packets in the same flow,
+such as the packet-derived hash described below. Selection is deterministic for a
 fixed hash and ordered active membership. Membership, ordering, or availability
 changes may remap flows. Weighted and resilient ECMP are not implemented.
 
@@ -114,7 +114,8 @@ all fragments in a flow. No transport checksum update is needed for changes to
 Ethernet addresses or TTL/hop limit.
 
 The function allocates no memory and performs no transmission. The caller owns
-the frame and supplies its flow hash. A future transmit backend must ensure
+the frame and may supply its flow hash or use the overload that derives it from
+the parsed packet. A future transmit backend must ensure
 minimum Ethernet padding and enforce output MTU. ICMP error generation, local
 delivery, address-policy checks, and ARP/neighbor discovery are not implemented.
 Tables must remain unchanged during the call.
@@ -123,3 +124,25 @@ Tests verify both address families for every forwarding TTL/hop limit (2–255),
 IPv4 checksum correctness, exact mutation boundaries, preserved payload/padding,
 all truncation boundaries, expired hops, corrupt checksums, unsupported headers,
 and resolution failures. Rejected frames are checked for byte-for-byte equality.
+
+## Packet flow hashing
+
+`forwarding::flow_hash` accepts an unmodified view from `parse_packet` and hashes
+the IP family, source address, destination address, and protocol/next-header value.
+Non-fragmented TCP/UDP packets include the four port bytes when available within
+the IP datagram. Other protocols and short transport payloads use addresses and
+protocol only. This helper does not validate transport headers or checksums.
+
+Every IPv4 fragment, including one with zero offset and the more-fragments flag,
+uses addresses and protocol only. This keeps a fragmented datagram on one path;
+fragmented and unfragmented traffic for the same transport flow may select
+different paths. IPv6 extension headers are not traversed, and the forwarding
+path continues to reject them. IPv4 option bytes are skipped when locating ports;
+the forwarding path still rejects IPv4 options.
+
+Hashing is directional, allocation-free, and deterministic across platforms. It
+uses fixed byte-wise integer operations with an optional seed, excluding MACs,
+TTL/hop limit, checksums, IPv6 flow labels, and payload. It is not cryptographic.
+The three-argument `forward_packet` overload derives this hash without parsing a
+second time. Tests cover flow fields, ignored fields, seeds, truncation around
+ports, fragment affinity, option offsets, and automatic ECMP integration.

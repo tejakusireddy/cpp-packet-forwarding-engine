@@ -22,4 +22,8 @@ using ForwardResult = std::variant<ForwardedPacket, ParseError, ResolutionError,
                                            const Fib& fib, const NextHopTable& next_hops,
                                            std::uint64_t flow_hash) noexcept;
 
+// Derives a flow hash from the parsed packet; shares the same forwarding path.
+[[nodiscard]] ForwardResult forward_packet(std::span<std::uint8_t> frame,
+                                           const Fib& fib, const NextHopTable& next_hops) noexcept;
+
 } // namespace forwarding
