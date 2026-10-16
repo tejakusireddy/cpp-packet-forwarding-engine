@@ -2,8 +2,6 @@ name: Hosted Linux benchmarks
 
 on:
   workflow_dispatch:
-  push:
-    branches: [benchmark/linux-baseline]
 
 permissions:
   contents: read
