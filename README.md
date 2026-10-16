@@ -4,9 +4,9 @@ High-performance userspace packet forwarding engine in C++20 with IPv4/IPv6, FIB
 The project is under development. The current implementation provides a
 bounds-checked, allocation-free Ethernet II and IPv4/IPv6 parser and a mutable
 IPv4/IPv6 longest-prefix FIB, resolved next-hop groups, and equal-cost multipath
-selection, plus in-place frame preparation for forwarding. Packet transmission,
-multicore workers, and control-plane IPC are
-planned. No throughput or latency claims have been measured yet.
+selection, in-place frame preparation, and queue-connected forwarding workers.
+Packet transmission and control-plane IPC are planned. No throughput or latency
+claims have been measured yet.
 
 ## Build and test
 
@@ -179,10 +179,47 @@ Construct the queue before starting either thread and destroy it only after both
 threads stop. Remaining elements are destroyed with the queue. Multiple producers
 or consumers require separate queues or external synchronization. This queue is
 for threads in one process; shared-memory/process IPC is not implemented.
-Forwarding workers and control-plane update messages are not connected yet.
+Control-plane update messages are not connected yet.
 
 Tests cover exact capacity, full/empty behavior, repeated wraparound with both
 power-of-two and other capacities, move ownership, element destruction, and
 750,000 ordered multiword messages passed between producer and consumer threads
 across capacities 1, 3, and 1024. These are correctness tests, not throughput
 benchmarks.
+
+## Forwarding workers
+
+`forwarding::ForwardingWorker<Capacity>` connects one input queue and one completion
+queue to the forwarding path. A `PacketJob` owns a byte vector and caller-defined
+ID. Successful submission transfers its buffer without copying; full or closed
+input returns false and retains caller ownership. Each accepted job produces one
+completion containing the same ID, owned frame, and forwarding result, including
+for rejected packets. Error frames remain unchanged.
+
+Each worker requires one submitting thread, one processing thread, and one
+completion consumer. The submitter and completion consumer may be the same thread.
+Call `poll` on the processing thread or call `run` to poll until closed and drained.
+The caller creates and joins the processing thread. Multiple workers can read the
+same FIB and next-hop table, which must remain unchanged and outlive all workers.
+Dynamic routing-table publication is not implemented yet.
+
+When the output queue fills, the worker retains one pending completion and stops
+consuming input until that completion is published. It never forwards a pending
+packet again. Storage is bounded to `Capacity` queued inputs, `Capacity` queued
+outputs, and one in-flight/pending packet per worker, excluding caller-held jobs.
+Buffer sizes are caller-controlled; this bounds packet count rather than bytes.
+Queueing and forwarding do not allocate or copy packet buffers, though creating
+jobs and threads can allocate.
+
+The submitter calls `close` after its final submission. Continue receiving during
+shutdown: a full output queue intentionally blocks further progress. `finished`
+means every accepted job has been published; drain remaining completions and join
+the processing thread before destroying the worker. `run` yields when idle or
+backpressured. There is no forced cancellation or owned background thread.
+
+Tests force capacity-one input/output backpressure, verify buffer ownership and
+shutdown behavior, and pass 16,000 mixed IPv4/IPv6 jobs through eight worker threads
+sharing immutable tables. Each completion is checked against direct forwarding,
+including errors and per-worker ordering. This is a correctness test, not evidence
+of eight-core throughput or latency targets. NIC I/O, CPU affinity, packet pools,
+batching, and control-plane publication remain future work.
