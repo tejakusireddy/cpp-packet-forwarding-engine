@@ -5,8 +5,9 @@ resolved next-hop groups, ECMP, multicore workers, and versioned control-plane
 updates. Linux packet sockets provide a reference receive/transmit runtime.
 
 The portable implementation is tested on macOS with release builds, address and
-undefined-behavior sanitizers, and ThreadSanitizer. Linux build, loopback, and veth
-tests are configured in CI; they have not been executed locally in this workspace.
+undefined-behavior sanitizers, and ThreadSanitizer. Linux GCC/Clang builds, sanitizer
+suites, raw-socket loopback, and dual-stack veth forwarding also
+[pass in CI](https://github.com/tejakusireddy/cpp-packet-forwarding-engine/actions/runs/38966703953).
 The full performance targets are **not yet validated**.
 
 ## Build and run tests
