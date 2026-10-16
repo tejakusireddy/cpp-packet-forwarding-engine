@@ -57,6 +57,16 @@ reported in KiB with OS-specific unit conversion.
 
 ## Recording reproducible evidence
 
+Use the sweep runner to preserve all runs and environment metadata in a new directory:
+
+```sh
+python3 scripts/benchmark.py --output benchmarks/results/local
+```
+
+It runs both modes with 1, 2, 4, and 8 workers three times by default. It refuses
+to overwrite an existing nonempty result directory and records dirty-tree state.
+Unavailable CPU metadata is recorded as null rather than guessed.
+
 For each run save the JSON, exact command, git revision, compiler version/build
 flags, OS/kernel, CPU model, allowed CPU set, memory, and background load. Run 1,
 2, 4, and 8 workers at least three times. Keep every run, including outliers and
