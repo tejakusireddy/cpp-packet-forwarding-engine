@@ -2,6 +2,7 @@
 
 #include <cstdlib>
 #include <iostream>
+#include <random>
 #include <sys/socket.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -42,6 +43,32 @@ void codec() {
     bool rejected = false;
     try { (void)ipc::decode(trailing); } catch (const std::invalid_argument&) { rejected = true; }
     check(rejected, "trailing IPC accepted");
+    std::mt19937 random(137);
+    for (unsigned trial = 0; trial < 10000; ++trial) {
+        std::vector<std::uint8_t> input(random() % 256);
+        for (auto& byte : input) byte = static_cast<std::uint8_t>(random());
+        if (trial % 2 == 0 && input.size() >= 8) {
+            std::copy_n(bytes.begin(), 8, input.begin());
+        }
+        try {
+            const auto parsed = ipc::decode(input);
+            check(ipc::encode(parsed) == input, "accepted wire message does not roundtrip");
+        } catch (const std::invalid_argument&) {}
+    }
+}
+void disconnected_peers() {
+    std::array<int, 2> sockets{};
+    check(socketpair(AF_UNIX, SOCK_STREAM, 0, sockets.data()) == 0, "disconnect socketpair");
+    const std::array<std::uint8_t, 2> partial{0, 0};
+    check(send(sockets[1], partial.data(), partial.size(), 0) == 2, "partial length send");
+    close(sockets[1]);
+    bool failed = false;
+    try { (void)ipc::receive_batch(sockets[0]); } catch (const std::system_error&) { failed = true; }
+    check(failed, "partial message EOF must fail");
+    failed = false;
+    try { ipc::send_batch(sockets[0], batch()); } catch (const std::system_error&) { failed = true; }
+    check(failed, "closed peer must fail without SIGPIPE termination");
+    close(sockets[0]);
 }
 void process_transport() {
     std::array<int, 2> sockets{};
@@ -70,4 +97,4 @@ void process_transport() {
     check(store.acquire()->version() == 1, "IPC publication version");
 }
 }
-int main() { codec(); process_transport(); std::cout << "All IPC tests passed\n"; }
+int main() { codec(); disconnected_peers(); process_transport(); std::cout << "All IPC tests passed\n"; }
